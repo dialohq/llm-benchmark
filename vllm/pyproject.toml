@@ -1,0 +1,76 @@
+[project]
+name = "vllm-env"
+version = "0.1.0"
+description = "vLLM serving env, bleeding-edge 2026-04-21"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "vllm==0.19.1",
+  "huggingface-hub",
+  "hf-transfer",
+]
+
+[project.optional-dependencies]
+# Hopper SM_90 — CUDA 12.9 stack.
+h100 = [
+  "torch==2.10.0",
+  "torchvision==0.25.0",
+  "torchaudio==2.10.0",
+  "flashinfer-python==0.6.6",
+  "flashinfer-cubin==0.6.6",
+  "xgrammar>=0.1.32,<1.0.0",
+]
+# Hopper SM_90 — identical wheel set to H100 (same arch, more HBM).
+h200 = [
+  "torch==2.10.0",
+  "torchvision==0.25.0",
+  "torchaudio==2.10.0",
+  "flashinfer-python==0.6.6",
+  "flashinfer-cubin==0.6.6",
+  "xgrammar>=0.1.32,<1.0.0",
+]
+# Blackwell SM_100 — CUDA 13.0 stack. Torch comes from cu130 index.
+b200 = [
+  "torch==2.10.0",
+  "torchvision==0.25.0",
+  "torchaudio==2.10.0",
+  "flashinfer-python==0.6.6",
+  "flashinfer-cubin==0.6.6",
+  "xgrammar>=0.1.32,<1.0.0",
+]
+
+[tool.uv]
+package = false
+conflicts = [
+  [
+    { extra = "h100" },
+    { extra = "h200" },
+    { extra = "b200" },
+  ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu129", extra = "h100" },
+  { index = "pytorch-cu129", extra = "h200" },
+  { index = "pytorch-cu130", extra = "b200" },
+]
+torchvision = [
+  { index = "pytorch-cu129", extra = "h100" },
+  { index = "pytorch-cu129", extra = "h200" },
+  { index = "pytorch-cu130", extra = "b200" },
+]
+torchaudio = [
+  { index = "pytorch-cu129", extra = "h100" },
+  { index = "pytorch-cu129", extra = "h200" },
+  { index = "pytorch-cu130", extra = "b200" },
+]

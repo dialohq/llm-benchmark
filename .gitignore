@@ -1,0 +1,19 @@
+# venvs (rebuild via `uv sync`)
+.venv*/
+**/.venv-*/
+
+# host-side snapshot dir, not ours
+.venv-backups/
+
+# HF model cache (~100GB+)
+.hf_home/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# logs / scratch
+/tmp/
+*.log
