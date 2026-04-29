@@ -31,11 +31,12 @@
       };
       lib = pkgs.lib;
 
-      # NVIDIA userspace driver libs come from the host kernel module, not Nix.
-      # libcuda.so + libnvidia-ml.so are dlopen'd at runtime by the engines and
-      # by /usr/bin/nvidia-smi; without this on LD_LIBRARY_PATH they are not
-      # found. Verified absent of libnccl* here, so this path is safe to add
-      # alongside wheel-bundled NCCL (see NATIVE_DEPS.md §"Common").
+      # NVIDIA userspace driver libs come from the host kernel module, not
+      # Nix. libcuda.so + libnvidia-ml.so are dlopen'd at runtime by the
+      # engines and by /usr/bin/nvidia-smi; without this on LD_LIBRARY_PATH
+      # they are not found. Important: /usr/lib/x86_64-linux-gnu must NOT
+      # contain libnccl* — the engines bundle their own NCCL via wheels and
+      # a host NCCL on LD_LIBRARY_PATH causes symbol clashes at import.
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
       # Tools every engine shell needs: uv (lockfile-driven installer), Python
@@ -108,20 +109,43 @@
         ];
       };
 
-      # Per-engine system deps. These mirror the apt-get lines in NATIVE_DEPS.md
-      # but pulled from nixpkgs:
-      #   libnuma-dev / libnuma1   → numactl
-      #   libopenmpi-dev           → openmpi (multi-output: bin+dev+lib)
-      #   libczmq4 / libczmq-dev   → czmq    (4.2.1 — same SONAME as libczmq4)
-      #   libzmq3-dev              → zeromq  (4.3.x; libzmq.so.5)
+      # Per-engine system deps. These translate the apt-get-style host
+      # requirements that each engine documents into nixpkgs derivations:
+      #   libnuma-dev / libnuma1   → numactl     (sglang topology pinning)
+      #   libopenmpi-dev           → openmpi     (mpi4py at install time;
+      #                                           trt-llm worker spawn)
+      #   libczmq4 / libczmq-dev   → czmq        (4.2.1 — same SONAME as
+      #                                           libczmq4; sglang IPC)
+      #   libzmq3-dev              → zeromq      (4.3.x; libzmq.so.5;
+      #                                           trt-llm disagg serving)
       sglangSysDeps = with pkgs; [ numactl openmpi czmq zeromq cudaToolkit ];
       trtllmSysDeps = with pkgs; [ openmpi zeromq cudaToolkit ];
       vllmSysDeps   = [ cudaToolkit ];
 
+      # `smoke` command embedded in each devshell. Reads $PROJECT_DIR
+      # (set by the shellHook), activates the engine venv, then runs the
+      # boot-server-curl-shutdown script with the engine name baked in.
+      # smoke.sh is copied into the nix store at flake-eval time — edits
+      # take effect on the next `nix develop` entry, which is fine for a
+      # smoke runner.
+      mkSmokeBin = engine: pkgs.writeShellScriptBin "smoke" ''
+        set -euo pipefail
+        : "''${PROJECT_DIR:?Not in a devshell — run 'nix develop .#${engine}' first.}"
+        if [ ! -d "$PROJECT_DIR/.venv" ]; then
+          echo "✘ venv missing at $PROJECT_DIR/.venv" >&2
+          echo "  Run: cd \"$PROJECT_DIR\" && uv sync ..." >&2
+          exit 1
+        fi
+        cd "$PROJECT_DIR"
+        # shellcheck disable=SC1091
+        . .venv/bin/activate
+        exec bash ${./smoke.sh} ${engine} "$@"
+      '';
+
       mkEngineShell = { name, projectDir, sysDeps }:
         pkgs.mkShellNoCC {
           inherit name;
-          packages = commonTools ++ sysDeps;
+          packages = commonTools ++ sysDeps ++ [ (mkSmokeBin name) ];
 
           shellHook = ''
             # Locate the engine subdir by walking up from $PWD until we find
@@ -249,9 +273,20 @@
             '' else ''
               echo "  Sync with:  cd \"$PROJECT_DIR\" && uv sync --extra h100"
             ''}
+            echo "  Smoke test: smoke      (boots ${name} server, runs one chat completion via curl)"
             unset __drv
           '';
         };
+      # `nix run .#smoke-<engine>` — re-enter the matching devshell and
+       # invoke the in-shell `smoke` command. Lets you run the smoke test
+       # from anywhere without remembering the `nix develop` invocation.
+      mkSmokeApp = engine: {
+        type = "app";
+        program = toString (pkgs.writeShellScript "smoke-${engine}-app" ''
+          exec ${pkgs.nix}/bin/nix develop ${self.outPath}#${engine} \
+            --command smoke "$@"
+        '');
+      };
     in {
       devShells.${system} = {
         vllm    = mkEngineShell { name = "vllm";    projectDir = "vllm";    sysDeps = vllmSysDeps;   };
@@ -259,6 +294,12 @@
         trt-llm = mkEngineShell { name = "trt-llm"; projectDir = "trt-llm"; sysDeps = trtllmSysDeps; };
 
         default = self.devShells.${system}.vllm;
+      };
+
+      apps.${system} = {
+        smoke-vllm    = mkSmokeApp "vllm";
+        smoke-sglang  = mkSmokeApp "sglang";
+        smoke-trt-llm = mkSmokeApp "trt-llm";
       };
     };
 }

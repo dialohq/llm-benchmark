@@ -28,17 +28,23 @@ mkdir -p "$LOG_DIR"
 case "$ENGINE" in
   sglang)
     PORT=30000
+    # --attention-backend fa3 is required on Hopper for gpt-oss attention
+    # sinks; FlashInfer + XFormers both refuse to load. Harmless for other
+    # models since fa3 works for any Hopper-supported architecture.
     LAUNCH=(
       python -m sglang.launch_server
       --model-path "$MODEL"
       --tp "$TP"
       --mem-fraction-static 0.80
       --disable-cuda-graph
+      --attention-backend fa3
       --host "$HOST" --port "$PORT"
     )
     ;;
   vllm)
     PORT=8000
+    # vllm auto-selects FLASH_ATTN on Hopper, no need to force. The
+    # reasoning/tool-call parsers are auto-applied for gpt-oss.
     LAUNCH=(
       vllm serve "$MODEL"
       --tensor-parallel-size "$TP"
@@ -50,9 +56,17 @@ case "$ENGINE" in
     ;;
   trt-llm)
     PORT=8000
+    # --backend pytorch skips the TensorRT engine-build step and uses the
+    # same OpenAI Triton MoE kernel as vLLM/SGLang on Hopper. The TRTLLM-Gen
+    # MoE path (the fast one) only kicks in on Blackwell (sm_100+).
+    # Tight batch/seq budget keeps the autotuner warmup short (without it
+    # the cold start is ~7 min: import + MPI worker re-import + autotuner).
     LAUNCH=(
       trtllm-serve "$MODEL"
+      --backend pytorch
       --tp_size "$TP"
+      --max_batch_size 4
+      --max_seq_len 4096
       --host "$HOST" --port "$PORT"
     )
     ;;
