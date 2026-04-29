@@ -3,7 +3,6 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Pull prebuilt unfree cuda* derivations from the cuda-maintainers cache.
   nixConfig = {
     extra-substituters = [ "https://cuda-maintainers.cachix.org" ];
     extra-trusted-public-keys = [
@@ -16,53 +15,40 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        # cudaPackages.* is unfree under CUDA EULA. cudaSupport stays off:
-        # we use prebuilt wheels for everything GPU-related, we only need
-        # nixpkgs to give us nvcc + headers.
         config = { allowUnfree = true; cudaSupport = false; };
       };
       lib = pkgs.lib;
 
-      # NVIDIA userspace driver libs come from the host kernel module, not
-      # Nix. /usr/lib/x86_64-linux-gnu has libcuda.so + libnvidia-ml.so on
-      # this container; verified absent of libnccl* (engines bundle their
-      # own — a host NCCL on LD_LIBRARY_PATH would clash at import).
+      # Host driver libs (libcuda.so + libnvidia-ml.so) come from the
+      # kernel module, not Nix. /usr/lib/x86_64-linux-gnu has them on
+      # this container; libnccl* is verified absent (engines bundle
+      # their own NCCL via wheels).
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
-      # cuda_nvcc (compiler), cuda_cudart (runtime headers nvcc looks for
-      # under CUDA_HOME), cuda_cccl (CUB/Thrust headers deep_gemm pulls in).
       cudaToolkit = pkgs.symlinkJoin {
         name = "cuda-12.9-merged";
         paths = with pkgs.cudaPackages; [ cuda_nvcc cuda_cudart cuda_cccl ];
       };
 
+      # Note: no python here. UV_PYTHON_PREFERENCE=only-managed makes uv
+      # download python-build-standalone, whose interpreter's PT_INTERP
+      # is /lib64/ld-linux-x86-64.so.2 → on this nix-ld container that's
+      # nix-ld, which honors NIX_LD_LIBRARY_PATH. nixpkgs' own python's
+      # PT_INTERP is the Nix glibc loader and ignores it, so mixing the
+      # two is what previously forced LD_LIBRARY_PATH into the picture.
       common = with pkgs; [
-        uv python312 git gcc gnumake cmake pkg-config which binutils
-        # ninja: flashinfer / vllm / sglang JIT-build kernels with it.
-        ninja
-        # rustc/cargo: outlines-core (sglang transitive dep) builds via
-        # setuptools-rust on Py 3.13+ wheels-missing paths.
-        rustc cargo
-        # operator + smoke-test tools.
-        curl jq htop
+        uv git gcc gnumake cmake pkg-config which binutils
+        ninja rustc cargo curl jq htop
       ];
 
-      # Runtime libs prebuilt wheels dlopen. libstdc++ is load-bearing —
-      # torch/vllm/sglang wheels are linked against a recent libstdc++.
-      # python312 here puts /nix/store/.../python3-*/lib on LD_LIBRARY_PATH
-      # so tensorrt_llm's C++ extension can dlopen libpython3.12.so.
+      # Runtime libs the manylinux wheels dlopen.
       runtimeLibs = with pkgs; [
-        stdenv.cc.cc.lib zlib glib libffi openssl ncurses xz python312
+        stdenv.cc.cc.lib zlib glib libffi openssl ncurses xz
       ];
 
-      # /usr/lib/x86_64-linux-gnu must come last (lowest priority) — Nix
-      # libs win, host driver fills in libcuda/libnvidia-ml only.
       ldPath = sysDeps:
         lib.makeLibraryPath (runtimeLibs ++ sysDeps) + ":" + driverLib;
 
-      # Persistent JIT caches (flashinfer ninja, Triton, Inductor) — the
-      # only thing we can't express as static mkShell env attrs because
-      # $HOME isn't expanded at flake eval. Tiny shellHook handles it.
       cacheHook = ''
         : "''${LLM_CACHE_ROOT:=$HOME/.cache/llm-benchmark}"
         export TRITON_CACHE_DIR="$LLM_CACHE_ROOT/triton"
@@ -72,32 +58,37 @@
         mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" \
                  "$FLASHINFER_WORKSPACE_BASE" "$VLLM_CACHE_ROOT"
       '';
+
+      # Thin attribute-merging helper around mkShellNoCC. Sets the env
+      # vars every engine shares; the per-engine call overrides whatever
+      # it needs. Not a derivation factory — each shell stays explicit.
+      mkShell = attrs: pkgs.mkShellNoCC ({
+        HF_HUB_ENABLE_HF_TRANSFER = "1";
+        UV_PYTHON = "3.12";
+        # Avoid pkgs.python312 so the venv's python is uv-managed
+        # (nix-ld-loaded), then NIX_LD_LIBRARY_PATH alone is enough.
+        UV_PYTHON_PREFERENCE = "only-managed";
+        # Multi-GB tensorrt-llm wheel from pypi.nvidia.com.
+        UV_HTTP_TIMEOUT = "600";
+        CUDA_HOME = "${cudaToolkit}";
+        CUDA_PATH = "${cudaToolkit}";
+        # Skip Triton's libcuda discovery via /sbin/ldconfig — the
+        # ldconfig wrapper here is a nushell script that crashes under
+        # nixpkgs-unstable's glibc.
+        TRITON_LIBCUDA_PATH = driverLib;
+        # Build-time linker for flashinfer's `-lcuda`.
+        LIBRARY_PATH = driverLib;
+        shellHook = cacheHook;
+      } // attrs);
     in {
       devShells.${system} = {
-        vllm = pkgs.mkShellNoCC {
+        vllm = mkShell {
           name = "vllm";
           packages = common ++ [ cudaToolkit ];
-
-          HF_HUB_ENABLE_HF_TRANSFER = "1";
-          UV_PYTHON = "3.12";
-          # tensorrt-llm wheel from pypi.nvidia.com is multi-GB;
-          # harmless for the lighter engines.
-          UV_HTTP_TIMEOUT = "600";
-          CUDA_HOME = "${cudaToolkit}";
-          CUDA_PATH = "${cudaToolkit}";
-          # Skip Triton's libcuda discovery via /sbin/ldconfig — on
-          # this nix-ld container ldconfig is a nushell wrapper built
-          # against an older glibc and crashes under nixpkgs-unstable.
-          TRITON_LIBCUDA_PATH = driverLib;
-          # Build-time linker needs libcuda.so for flashinfer's
-          # `-lcuda` (sglang tinygemm2, vllm piecewise CUDA graphs).
-          LIBRARY_PATH = driverLib;
-          LD_LIBRARY_PATH = ldPath [ ];
-
-          shellHook = cacheHook;
+          NIX_LD_LIBRARY_PATH = ldPath [ ];
         };
 
-        sglang = pkgs.mkShellNoCC {
+        sglang = mkShell {
           name = "sglang";
           # apt-get → nixpkgs translation:
           #   libnuma-dev → numactl, libopenmpi-dev → openmpi,
@@ -106,36 +97,17 @@
           packages = common ++ (with pkgs; [
             cudaToolkit numactl openmpi czmq zeromq
           ]);
-
-          HF_HUB_ENABLE_HF_TRANSFER = "1";
-          UV_PYTHON = "3.12";
-          UV_HTTP_TIMEOUT = "600";
-          CUDA_HOME = "${cudaToolkit}";
-          CUDA_PATH = "${cudaToolkit}";
           MPICC = "${pkgs.openmpi}/bin/mpicc";
-          TRITON_LIBCUDA_PATH = driverLib;
-          LIBRARY_PATH = driverLib;
-          LD_LIBRARY_PATH = ldPath (with pkgs; [
+          NIX_LD_LIBRARY_PATH = ldPath (with pkgs; [
             numactl openmpi czmq zeromq
           ]);
-
-          shellHook = cacheHook;
         };
 
-        trt-llm = pkgs.mkShellNoCC {
+        trt-llm = mkShell {
           name = "trt-llm";
           packages = common ++ (with pkgs; [ cudaToolkit openmpi zeromq ]);
-
-          HF_HUB_ENABLE_HF_TRANSFER = "1";
-          UV_PYTHON = "3.12";
-          UV_HTTP_TIMEOUT = "600";
-          CUDA_HOME = "${cudaToolkit}";
-          CUDA_PATH = "${cudaToolkit}";
           MPICC = "${pkgs.openmpi}/bin/mpicc";
-          TRITON_LIBCUDA_PATH = driverLib;
-          LIBRARY_PATH = driverLib;
-          LD_LIBRARY_PATH = ldPath (with pkgs; [ openmpi zeromq ]);
-
+          NIX_LD_LIBRARY_PATH = ldPath (with pkgs; [ openmpi zeromq ]);
           shellHook = cacheHook + ''
             # tensorrt-llm 1.2 cu13 stack references CUDA Driver API
             # symbols (cuKernelGetName, added in CUDA 12.4) that aren't
