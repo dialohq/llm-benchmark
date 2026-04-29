@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Boot sglang against gpt-oss-120b, fire one chat completion, shut down.
+# Run inside `nix develop .#sglang`.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+cd "$ROOT/sglang"
+[ -d .venv ] || { echo "✘ venv missing — run: uv sync --extra h100" >&2; exit 1; }
+# shellcheck disable=SC1091
+. .venv/bin/activate
+
+MODEL=${SMOKE_MODEL:-openai/gpt-oss-120b}
+TP=${SMOKE_TP:-2}
+PORT=${SMOKE_PORT:-30000}
+LOG_DIR=${LOG_DIR:-/tmp/llm-bench-smoke}
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/sglang.log"
+
+# --attention-backend fa3 is required on Hopper for gpt-oss attention
+# sinks; FlashInfer + XFormers refuse to load. --disable-cuda-graph
+# keeps startup short for the smoke test.
+python -m sglang.launch_server \
+  --model-path "$MODEL" --tp "$TP" \
+  --mem-fraction-static 0.80 --disable-cuda-graph \
+  --attention-backend fa3 \
+  --host 127.0.0.1 --port "$PORT" >"$LOG" 2>&1 &
+pid=$!
+trap 'kill -INT $pid 2>/dev/null; wait $pid 2>/dev/null || true' EXIT
+
+deadline=$(( $(date +%s) + 1200 ))
+until curl -fsS "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; do
+  kill -0 $pid 2>/dev/null || { echo "✘ sglang died — see $LOG" >&2; tail -30 "$LOG" >&2; exit 1; }
+  [ "$(date +%s)" -lt "$deadline" ] || { echo "✘ sglang ready timeout" >&2; exit 1; }
+  sleep 5
+done
+
+curl -sS "http://127.0.0.1:$PORT/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello, my name is\"}],\"temperature\":0,\"max_tokens\":32}" \
+  | tee "$LOG_DIR/sglang.response.json"
+echo

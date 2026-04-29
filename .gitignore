@@ -17,3 +17,6 @@ __pycache__/
 # logs / scratch
 /tmp/
 *.log
+
+# nix-ld's ldconfig wrapper drops mktemp files in cwd
+tmp.??????????

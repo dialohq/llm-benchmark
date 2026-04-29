@@ -3,10 +3,7 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Pull prebuilt unfree cuda* derivations (cuda_nvcc, cuda_cudart,
-  # cuda_cccl) from the cuda-maintainers binary cache instead of building
-  # them locally on first eval. With these substituters the cold path of
-  # `nix develop .#<engine>` drops from minutes to seconds.
+  # Pull prebuilt unfree cuda* derivations from the cuda-maintainers cache.
   nixConfig = {
     extra-substituters = [ "https://cuda-maintainers.cachix.org" ];
     extra-trusted-public-keys = [
@@ -19,287 +16,143 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        # cudaPackages.* (cuda_nvcc, cuda_cudart, cuda_cccl) are unfree
-        # under the CUDA EULA and won't evaluate without this. cudaSupport
-        # stays false on purpose — we use prebuilt wheels for everything
-        # GPU-related, we only need nixpkgs to give us nvcc and the
-        # toolchain headers, not to recompile e.g. opencv with CUDA.
-        config = {
-          allowUnfree = true;
-          cudaSupport = false;
-        };
+        # cudaPackages.* is unfree under CUDA EULA. cudaSupport stays off:
+        # we use prebuilt wheels for everything GPU-related, we only need
+        # nixpkgs to give us nvcc + headers.
+        config = { allowUnfree = true; cudaSupport = false; };
       };
       lib = pkgs.lib;
 
       # NVIDIA userspace driver libs come from the host kernel module, not
-      # Nix. libcuda.so + libnvidia-ml.so are dlopen'd at runtime by the
-      # engines and by /usr/bin/nvidia-smi; without this on LD_LIBRARY_PATH
-      # they are not found. Important: /usr/lib/x86_64-linux-gnu must NOT
-      # contain libnccl* — the engines bundle their own NCCL via wheels and
-      # a host NCCL on LD_LIBRARY_PATH causes symbol clashes at import.
+      # Nix. /usr/lib/x86_64-linux-gnu has libcuda.so + libnvidia-ml.so on
+      # this container; verified absent of libnccl* (engines bundle their
+      # own — a host NCCL on LD_LIBRARY_PATH would clash at import).
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
-      # Tools every engine shell needs: uv (lockfile-driven installer), Python
-      # 3.12 (pyproject pin), and a compiler toolchain because TRT-LLM's
-      # mpi4py and any flash-attn rebuild are sdist-only on Py 3.12.
-      commonTools = with pkgs; [
-        uv
-        python312
-        git
-        gcc
-        gnumake
-        cmake
-        pkg-config
-        which
-        binutils
-        # Some Python deps ship sdist-only on 3.13 and build via maturin /
-        # setuptools-rust (e.g. outlines-core, sglang's transitive dep).
-        rustc
-        cargo
-        # ninja: flashinfer / vllm / sglang JIT-build kernels via ninja.
-        # Without it the first launch falls back to make and is much slower.
-        ninja
-        # ccache wraps gcc/nvcc so a re-JIT of the same kernel (across
-        # engine restarts, across vllm vs sglang sharing a triton kernel)
-        # is a hash hit instead of a fresh compile. ~10x speedup on warm
-        # launches.
-        ccache
-        # Operator / smoke-test tools — curl drives smoke.sh, jq parses
-        # the response, htop/nvtop are nice on a 700W TDP host.
-        curl
-        jq
-        htop
-      ];
-
-      # Libraries that prebuilt wheels link against at runtime. libstdc++ is
-      # the load-bearing one — torch/vllm/sglang wheels are compiled against
-      # a recent libstdc++ that the host glibc can't supply on its own.
-      # The rest are common-but-quietly-needed: libffi (cffi/pyzmq), openssl
-      # (urllib3 cert bundle on some wheels), libtinfo (curses-using TUIs
-      # like vllm's progress bar), xz (transformers occasionally), nccl
-      # is intentionally omitted because the engines bundle their own.
-      commonRuntimeLibs = with pkgs; [
-        stdenv.cc.cc.lib
-        zlib
-        glib
-        libffi
-        openssl
-        ncurses
-        xz
-        # tensorrt_llm's C++ extension dlopens libpython3.12.so without an
-        # rpath into the Python it was built against. Adding python312
-        # here puts /nix/store/.../python3.../lib on LD_LIBRARY_PATH so
-        # the dlopen resolves; harmless for vllm/sglang.
-        python312
-      ];
-
-      # SGLang loads `deep_gemm` from sglang.layers.quantization, and
-      # deep_gemm.__init__ JIT-initialises with `_find_cuda_home()` which
-      # asserts that $CUDA_HOME or `which nvcc` resolves. Torch's bundled
-      # nvidia/* wheels ship runtime libs but not nvcc — so we provide the
-      # CUDA 12.9 toolchain from nixpkgs and point CUDA_HOME at a merged
-      # directory below. cu129 here matches the torch=2.9.1+cu129 wheel.
+      # cuda_nvcc (compiler), cuda_cudart (runtime headers nvcc looks for
+      # under CUDA_HOME), cuda_cccl (CUB/Thrust headers deep_gemm pulls in).
       cudaToolkit = pkgs.symlinkJoin {
         name = "cuda-12.9-merged";
-        paths = with pkgs.cudaPackages; [
-          cuda_nvcc       # nvcc compiler driver
-          cuda_cudart     # libcudart + headers (already in torch wheel, but
-                          # nvcc looks for them under CUDA_HOME)
-          cuda_cccl       # CUB / Thrust headers — deep_gemm includes them
-        ];
+        paths = with pkgs.cudaPackages; [ cuda_nvcc cuda_cudart cuda_cccl ];
       };
 
-      # Per-engine system deps. These translate the apt-get-style host
-      # requirements that each engine documents into nixpkgs derivations:
-      #   libnuma-dev / libnuma1   → numactl     (sglang topology pinning)
-      #   libopenmpi-dev           → openmpi     (mpi4py at install time;
-      #                                           trt-llm worker spawn)
-      #   libczmq4 / libczmq-dev   → czmq        (4.2.1 — same SONAME as
-      #                                           libczmq4; sglang IPC)
-      #   libzmq3-dev              → zeromq      (4.3.x; libzmq.so.5;
-      #                                           trt-llm disagg serving)
-      sglangSysDeps = with pkgs; [ numactl openmpi czmq zeromq cudaToolkit ];
-      trtllmSysDeps = with pkgs; [ openmpi zeromq cudaToolkit ];
-      vllmSysDeps   = [ cudaToolkit ];
+      common = with pkgs; [
+        uv python312 git gcc gnumake cmake pkg-config which binutils
+        # ninja: flashinfer / vllm / sglang JIT-build kernels with it.
+        ninja
+        # rustc/cargo: outlines-core (sglang transitive dep) builds via
+        # setuptools-rust on Py 3.13+ wheels-missing paths.
+        rustc cargo
+        # operator + smoke-test tools.
+        curl jq htop
+      ];
 
-      # `smoke` command embedded in each devshell. Reads $PROJECT_DIR
-      # (set by the shellHook), activates the engine venv, then runs the
-      # boot-server-curl-shutdown script with the engine name baked in.
-      # smoke.sh is copied into the nix store at flake-eval time — edits
-      # take effect on the next `nix develop` entry, which is fine for a
-      # smoke runner.
-      mkSmokeBin = engine: pkgs.writeShellScriptBin "smoke" ''
-        set -euo pipefail
-        : "''${PROJECT_DIR:?Not in a devshell — run 'nix develop .#${engine}' first.}"
-        if [ ! -d "$PROJECT_DIR/.venv" ]; then
-          echo "✘ venv missing at $PROJECT_DIR/.venv" >&2
-          echo "  Run: cd \"$PROJECT_DIR\" && uv sync ..." >&2
-          exit 1
-        fi
-        cd "$PROJECT_DIR"
-        # shellcheck disable=SC1091
-        . .venv/bin/activate
-        exec bash ${./smoke.sh} ${engine} "$@"
+      # Runtime libs prebuilt wheels dlopen. libstdc++ is load-bearing —
+      # torch/vllm/sglang wheels are linked against a recent libstdc++.
+      # python312 here puts /nix/store/.../python3-*/lib on LD_LIBRARY_PATH
+      # so tensorrt_llm's C++ extension can dlopen libpython3.12.so.
+      runtimeLibs = with pkgs; [
+        stdenv.cc.cc.lib zlib glib libffi openssl ncurses xz python312
+      ];
+
+      # /usr/lib/x86_64-linux-gnu must come last (lowest priority) — Nix
+      # libs win, host driver fills in libcuda/libnvidia-ml only.
+      ldPath = sysDeps:
+        lib.makeLibraryPath (runtimeLibs ++ sysDeps) + ":" + driverLib;
+
+      # Persistent JIT caches (flashinfer ninja, Triton, Inductor) — the
+      # only thing we can't express as static mkShell env attrs because
+      # $HOME isn't expanded at flake eval. Tiny shellHook handles it.
+      cacheHook = ''
+        : "''${LLM_CACHE_ROOT:=$HOME/.cache/llm-benchmark}"
+        export TRITON_CACHE_DIR="$LLM_CACHE_ROOT/triton"
+        export TORCHINDUCTOR_CACHE_DIR="$LLM_CACHE_ROOT/inductor"
+        export FLASHINFER_WORKSPACE_BASE="$LLM_CACHE_ROOT/flashinfer"
+        export VLLM_CACHE_ROOT="$LLM_CACHE_ROOT/vllm"
+        mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" \
+                 "$FLASHINFER_WORKSPACE_BASE" "$VLLM_CACHE_ROOT"
       '';
-
-      mkEngineShell = { name, projectDir, sysDeps }:
-        pkgs.mkShellNoCC {
-          inherit name;
-          packages = commonTools ++ sysDeps ++ [ (mkSmokeBin name) ];
-
-          shellHook = ''
-            # Locate the engine subdir by walking up from $PWD until we find
-            # the flake.nix at the repo root, then appending the project dir.
-            # `nix develop` keeps the user's cwd; ${toString ./.} is the
-            # /nix/store copy of the flake, which is read-only and wrong for
-            # `uv sync`. This walks back to the writable checkout.
-            __root="$PWD"
-            while [ "$__root" != "/" ] && [ ! -f "$__root/flake.nix" ]; do
-              __root="$(dirname "$__root")"
-            done
-            if [ -f "$__root/flake.nix" ]; then
-              export PROJECT_DIR="$__root/${projectDir}"
-            else
-              export PROJECT_DIR="$PWD/${projectDir}"
-            fi
-            unset __root
-
-            # hf_transfer is in every venv; flip the flag so HfApi uses it.
-            export HF_HUB_ENABLE_HF_TRANSFER=1
-
-            # Pin the venv to the project tree so `uv sync` from any subdir
-            # writes there (matches the existing vllm/.venv).
-            export UV_PROJECT_ENVIRONMENT="$PROJECT_DIR/.venv"
-
-            # Pin to CPython 3.12. The lockfiles were resolved against 3.12
-            # and several transitive deps (pyyaml 6.0.1, vllm-flash-attn,
-            # some flashinfer cubins) ship no 3.13 wheels — sdist builds
-            # blow up on 3.13's wheel-tag assertion. uv will download a
-            # managed 3.12 if it isn't already present.
-            export UV_PYTHON=3.12
-
-            # The TensorRT-LLM wheel from pypi.nvidia.com is multi-GB and
-            # routinely takes longer than uv's default 30s HTTP timeout to
-            # transfer. Bump to 10 minutes so cold syncs don't fail mid-
-            # download. Harmless for the other engines.
-            export UV_HTTP_TIMEOUT=600
-
-            # Persistent JIT compile caches. Each engine's first launch
-            # triggers Triton kernel codegen + Inductor + flashinfer ninja
-            # builds; without explicit dirs these caches live under /tmp
-            # and get wiped on container restart. Shared root keeps the
-            # caches warm across vllm/sglang switches when the kernels
-            # match (they often do — same triton, same flashinfer pin).
-            : "''${LLM_CACHE_ROOT:=$HOME/.cache/llm-benchmark}"
-            export TRITON_CACHE_DIR="$LLM_CACHE_ROOT/triton"
-            export TORCHINDUCTOR_CACHE_DIR="$LLM_CACHE_ROOT/inductor"
-            export FLASHINFER_WORKSPACE_BASE="$LLM_CACHE_ROOT/flashinfer"
-            export VLLM_CACHE_ROOT="$LLM_CACHE_ROOT/vllm"
-            export CCACHE_DIR="$LLM_CACHE_ROOT/ccache"
-            mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" \
-                     "$FLASHINFER_WORKSPACE_BASE" "$VLLM_CACHE_ROOT" \
-                     "$CCACHE_DIR"
-
-            # Wrap gcc/g++/nvcc with ccache so re-JIT of identical sources
-            # (very common — the same flashinfer kernel signature recurs
-            # across launches) hits cache instead of recompiling. Triton
-            # has its own object cache; ccache covers the C/CXX/CUDA path
-            # used by torch.utils.cpp_extension and flashinfer's ninja
-            # rules. NVCC_CCACHE_ENABLE makes nvcc's preprocessor stable
-            # so the hash is deterministic.
-            if command -v ccache >/dev/null 2>&1; then
-              export CC="ccache gcc"
-              export CXX="ccache g++"
-              export NVCC_PREPEND_FLAGS="''${NVCC_PREPEND_FLAGS:-} -ccbin gcc"
-              ccache --max-size=20G >/dev/null 2>&1 || true
-            fi
-
-            # mpi4py's build reads $MPICC. openmpi already puts it on PATH,
-            # but exporting helps uv's isolated build env keep it.
-            if command -v mpicc >/dev/null 2>&1; then
-              export MPICC="$(command -v mpicc)"
-            fi
-
-            # deep_gemm + any flash-attn rebuild look here. Point at the
-            # merged toolchain (nvcc + cudart + cccl). NVCC_PREPEND_FLAGS
-            # adds the CCCL include dir so deep_gemm's #include <cuda/...>
-            # resolves without the user having to set it.
-            if command -v nvcc >/dev/null 2>&1; then
-              export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
-              export CUDA_PATH="$CUDA_HOME"
-            fi
-
-            # Host driver libs (libcuda, libnvidia-ml) + Nix runtime libs
-            # (libstdc++, zlib, glib) needed by prebuilt torch / engine wheels.
-            export LD_LIBRARY_PATH="${lib.makeLibraryPath (commonRuntimeLibs ++ sysDeps)}:${driverLib}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-            # Build-time linker also needs to see libcuda.so. flashinfer
-            # JIT-compiles kernels (sglang's tinygemm2, vllm's piecewise
-            # CUDA graphs) and links with `-lcuda`; without LIBRARY_PATH
-            # pointing at the host driver dir, ld.bfd errors with
-            # "cannot find -lcuda" and the build fails before generation
-            # starts. Headers come from cudaToolkit, the stub library
-            # comes from the host driver package.
-            export LIBRARY_PATH="${driverLib}''${LIBRARY_PATH:+:$LIBRARY_PATH}"
-
-            # Hint a sync command tailored to this host. Driver detection
-            # via nvidia-smi falls back to "driver-r580" (the project's
-            # default-supported branch) so the message is still useful in
-            # CI / docker images without a driver loaded.
-            __drv=$(LD_LIBRARY_PATH="${driverLib}:$LD_LIBRARY_PATH" \
-                    /usr/bin/nvidia-smi --query-gpu=driver_version \
-                    --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)
-            __drv="''${__drv:-580}"
-            echo "▶ ${name} devshell ready. Project: $PROJECT_DIR"
-            ${if name == "trt-llm" then ''
-              # Hard-fail shell entry on unsupported drivers. The
-              # tensorrt-llm 1.2.x cu13 stack references CUDA Driver
-              # API symbols (cuKernelGetName, added in CUDA 12.4) that
-              # don't exist in libcuda.so on r5xx (≤r575) hosts. A
-              # successful `uv sync` followed by an ImportError at
-              # `import tensorrt_llm` is much more confusing than
-              # refusing to enter the shell at all.
-              if [ -z "''${__drv:-}" ] || [ "$__drv" -lt 580 ] 2>/dev/null; then
-                echo "  ✘ trt-llm devshell requires NVIDIA driver r580+. " >&2
-                echo "    Detected: r''${__drv:-<none>}." >&2
-                echo "    cu13 torch wheels need CUDA Driver API symbols" >&2
-                echo "    (e.g. cuKernelGetName) that pre-r550 libcuda.so" >&2
-                echo "    does not export — 'import tensorrt_llm' would" >&2
-                echo "    crash with 'undefined symbol'. Use the vllm or" >&2
-                echo "    sglang devshell on this host instead." >&2
-                exit 1
-              fi
-              echo "  Sync with:  cd \"$PROJECT_DIR\" && uv sync --extra driver-r''${__drv}"
-            '' else ''
-              echo "  Sync with:  cd \"$PROJECT_DIR\" && uv sync --extra h100"
-            ''}
-            echo "  Smoke test: smoke      (boots ${name} server, runs one chat completion via curl)"
-            unset __drv
-          '';
-        };
-      # `nix run .#smoke-<engine>` — re-enter the matching devshell and
-       # invoke the in-shell `smoke` command. Lets you run the smoke test
-       # from anywhere without remembering the `nix develop` invocation.
-      mkSmokeApp = engine: {
-        type = "app";
-        program = toString (pkgs.writeShellScript "smoke-${engine}-app" ''
-          exec ${pkgs.nix}/bin/nix develop ${self.outPath}#${engine} \
-            --command smoke "$@"
-        '');
-      };
     in {
       devShells.${system} = {
-        vllm    = mkEngineShell { name = "vllm";    projectDir = "vllm";    sysDeps = vllmSysDeps;   };
-        sglang  = mkEngineShell { name = "sglang";  projectDir = "sglang";  sysDeps = sglangSysDeps; };
-        trt-llm = mkEngineShell { name = "trt-llm"; projectDir = "trt-llm"; sysDeps = trtllmSysDeps; };
+        vllm = pkgs.mkShellNoCC {
+          name = "vllm";
+          packages = common ++ [ cudaToolkit ];
+
+          HF_HUB_ENABLE_HF_TRANSFER = "1";
+          UV_PYTHON = "3.12";
+          # tensorrt-llm wheel from pypi.nvidia.com is multi-GB;
+          # harmless for the lighter engines.
+          UV_HTTP_TIMEOUT = "600";
+          CUDA_HOME = "${cudaToolkit}";
+          CUDA_PATH = "${cudaToolkit}";
+          # Skip Triton's libcuda discovery via /sbin/ldconfig — on
+          # this nix-ld container ldconfig is a nushell wrapper built
+          # against an older glibc and crashes under nixpkgs-unstable.
+          TRITON_LIBCUDA_PATH = driverLib;
+          # Build-time linker needs libcuda.so for flashinfer's
+          # `-lcuda` (sglang tinygemm2, vllm piecewise CUDA graphs).
+          LIBRARY_PATH = driverLib;
+          LD_LIBRARY_PATH = ldPath [ ];
+
+          shellHook = cacheHook;
+        };
+
+        sglang = pkgs.mkShellNoCC {
+          name = "sglang";
+          # apt-get → nixpkgs translation:
+          #   libnuma-dev → numactl, libopenmpi-dev → openmpi,
+          #   libczmq-dev → czmq (4.2.1 = libczmq.so.4),
+          #   libzmq3-dev → zeromq.
+          packages = common ++ (with pkgs; [
+            cudaToolkit numactl openmpi czmq zeromq
+          ]);
+
+          HF_HUB_ENABLE_HF_TRANSFER = "1";
+          UV_PYTHON = "3.12";
+          UV_HTTP_TIMEOUT = "600";
+          CUDA_HOME = "${cudaToolkit}";
+          CUDA_PATH = "${cudaToolkit}";
+          MPICC = "${pkgs.openmpi}/bin/mpicc";
+          TRITON_LIBCUDA_PATH = driverLib;
+          LIBRARY_PATH = driverLib;
+          LD_LIBRARY_PATH = ldPath (with pkgs; [
+            numactl openmpi czmq zeromq
+          ]);
+
+          shellHook = cacheHook;
+        };
+
+        trt-llm = pkgs.mkShellNoCC {
+          name = "trt-llm";
+          packages = common ++ (with pkgs; [ cudaToolkit openmpi zeromq ]);
+
+          HF_HUB_ENABLE_HF_TRANSFER = "1";
+          UV_PYTHON = "3.12";
+          UV_HTTP_TIMEOUT = "600";
+          CUDA_HOME = "${cudaToolkit}";
+          CUDA_PATH = "${cudaToolkit}";
+          MPICC = "${pkgs.openmpi}/bin/mpicc";
+          TRITON_LIBCUDA_PATH = driverLib;
+          LIBRARY_PATH = driverLib;
+          LD_LIBRARY_PATH = ldPath (with pkgs; [ openmpi zeromq ]);
+
+          shellHook = cacheHook + ''
+            # tensorrt-llm 1.2 cu13 stack references CUDA Driver API
+            # symbols (cuKernelGetName, added in CUDA 12.4) that aren't
+            # in libcuda.so on r5xx (≤r575). Refuse shell entry rather
+            # than producing an unrunnable venv.
+            drv=$(LD_LIBRARY_PATH="${driverLib}" /usr/bin/nvidia-smi \
+              --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+              | head -1 | cut -d. -f1)
+            if [ -z "''${drv:-}" ] || [ "$drv" -lt 580 ] 2>/dev/null; then
+              echo "✘ trt-llm devshell requires NVIDIA driver r580+; got r''${drv:-<none>}" >&2
+              echo "  Use vllm or sglang on this host instead." >&2
+              exit 1
+            fi
+          '';
+        };
 
         default = self.devShells.${system}.vllm;
-      };
-
-      apps.${system} = {
-        smoke-vllm    = mkSmokeApp "vllm";
-        smoke-sglang  = mkSmokeApp "sglang";
-        smoke-trt-llm = mkSmokeApp "trt-llm";
       };
     };
 }
