@@ -16,13 +16,28 @@ LOG_DIR=${LOG_DIR:-/tmp/llm-bench-smoke}
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/sglang.log"
 
-# --attention-backend fa3 is required on Hopper for gpt-oss attention
-# sinks; FlashInfer + XFormers refuse to load. --disable-cuda-graph
-# keeps startup short for the smoke test.
-python -m sglang.launch_server \
+# Tuned for batch-1 single-stream steady-state throughput (lowest mean
+# request latency across N sequential requests; we don't care about
+# cold-start cost):
+#   --attention-backend fa3      mandatory on Hopper for gpt-oss attention sinks.
+#   --cuda-graph-max-bs 1        capture only batch=1 (cheap, ~5s vs ~38s
+#                                for sglang's default 50-bucket sweep);
+#                                3-4x faster decode than --disable-cuda-graph.
+#   --enable-torch-compile +
+#     --torch-compile-max-bs 1   inductor compiles the batch=1 graph; an
+#                                additional ~10-20% on top of CUDA graphs.
+#   --max-running-requests 1     scheduler stays single-stream so concurrent
+#                                requests serialise (no implicit batching
+#                                that would inflate per-request latency).
+#   --mem-fraction-static 0.85   plenty of KV headroom; doesn't matter for
+#                                batch=1 but lets longer prompts land.
+sglang serve \
   --model-path "$MODEL" --tp "$TP" \
-  --mem-fraction-static 0.80 --disable-cuda-graph \
   --attention-backend fa3 \
+  --cuda-graph-max-bs 1 \
+  --enable-torch-compile --torch-compile-max-bs 1 \
+  --max-running-requests 1 \
+  --mem-fraction-static 0.85 \
   --host 127.0.0.1 --port "$PORT" >"$LOG" 2>&1 &
 pid=$!
 trap 'kill -INT $pid 2>/dev/null; wait $pid 2>/dev/null || true' EXIT
