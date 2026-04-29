@@ -23,19 +23,19 @@ LOG="$LOG_DIR/sglang.log"
 #   --cuda-graph-max-bs 1        capture only batch=1 (cheap, ~5s vs ~38s
 #                                for sglang's default 50-bucket sweep);
 #                                3-4x faster decode than --disable-cuda-graph.
-#   --enable-torch-compile +
-#     --torch-compile-max-bs 1   inductor compiles the batch=1 graph; an
-#                                additional ~10-20% on top of CUDA graphs.
 #   --max-running-requests 1     scheduler stays single-stream so concurrent
 #                                requests serialise (no implicit batching
 #                                that would inflate per-request latency).
 #   --mem-fraction-static 0.85   plenty of KV headroom; doesn't matter for
 #                                batch=1 but lets longer prompts land.
+#
+# --enable-torch-compile is intentionally omitted: it crashes during
+# CUDA graph capture on this stack with `weakref.ProxyType has no
+# attribute __torch_dispatch__` (a torch._dynamo / sglang interaction).
 sglang serve \
   --model-path "$MODEL" --tp "$TP" \
   --attention-backend fa3 \
   --cuda-graph-max-bs 1 \
-  --enable-torch-compile --torch-compile-max-bs 1 \
   --max-running-requests 1 \
   --mem-fraction-static 0.85 \
   --host 127.0.0.1 --port "$PORT" >"$LOG" 2>&1 &
