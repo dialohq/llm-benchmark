@@ -1,88 +1,73 @@
 [project]
 name = "trtllm-env"
 version = "0.1.0"
-description = "TensorRT-LLM serving env, bleeding-edge 2026-04-21"
+description = "TensorRT-LLM serving env"
 requires-python = ">=3.10,<3.14"
+# tensorrt-llm, torch, and nvidia-ml-py are all pulled in by the host-
+# driver extra below, so each install is a self-consistent cu13 stack.
 dependencies = [
-  # 1.2.1 (2026-04-20) is newer than 1.3.0rc12 (2026-04-17) and stable.
-  # TRT-LLM wheels are NOT on PyPI — they live on https://pypi.nvidia.com
-  # which is declared as the `nvidia` index below.
-  "tensorrt-llm==1.2.1",
   "huggingface-hub",
   "hf-transfer",
+  "mpi4py==4.0.1",
 ]
 
 # ---------------------------------------------------------------------------
-# Extras are split into two axes — pick one from each:
+# Pick exactly one driver-r* extra that matches your host:
 #
-#   GPU variant      : h100 | h200 | b200      (selects torch cu130 wheel +
-#                                               parity with vllm/sglang)
-#   Host driver      : driver-r580 | driver-r590 | driver-r595
-#                                              (selects nvidia-ml-py whose
-#                                               NVML struct layout matches
-#                                               the host's libnvidia-ml.so)
-#
-# Example provisioning on an H100 host running driver 580.126.09:
-#
-#   uv sync --extra h100 --extra driver-r580
-#
-# Why the driver axis exists:
-# `tensorrt_llm._utils.confidential_compute_enabled()` calls
-# `nvmlSystemGetConfComputeSettings(c_nvmlSystemConfComputeSettings_v1_t())`
-# at engine init. That struct's layout changed between NVML versions, and
-# `nvidia-ml-py` ships per-driver-branch wheels named `13.<driver>.<patch>`.
-# If the pinned binding targets a newer driver branch than the host's
-# libnvidia-ml.so, the ctypes call reads past the struct → **silent
-# segfault during `Model init`** (the crash is in C, not catchable).
-#
-# tensorrt-llm 1.2.1 pins `nvidia-ml-py>=13`, so only r580+ wheels are
-# listed. On r570/r575 hosts downgrade `tensorrt-llm` to 1.1.x (whose
-# `nvidia-ml-py>=12,<13` pin lets you use `nvidia-ml-py==12.575.51` or
-# `12.570.172`) — that's out of scope for this project.
-#
-# Look up the host driver with:
 #   nvidia-smi --query-gpu=driver_version --format=csv,noheader
+#
+# Only r580+ branches are listed because there is no working trt-llm
+# config for older drivers:
+#
+#   * tensorrt-llm 1.1.0 and 1.2.x both pin `torch==2.9.x`.
+#   * torch 2.9 ships only cu128/cu130 wheels.
+#   * cu128/cu130 wheels call CUDA Driver API symbols (e.g.
+#     `cuKernelGetName`, added in CUDA 12.4) that don't exist on
+#     pre-r550 libcuda.so. Importing tensorrt_llm crashes with
+#     `undefined symbol: cuKernelGetName` before NVML is even reached.
+#   * Going back to a trt-llm release old enough for CUDA 12.2 (~0.12.x)
+#     loses gpt-oss support, which is the whole point of this benchmark.
+#
+# So: r535 / r570 / r575 hosts cannot run this engine. Use vllm or
+# sglang on those hosts (both have devshells in this flake) — they
+# accept torch wheels on a wider driver range because they don't pull
+# in trt-llm's pinned cu13 toolchain.
+#
+# Driver branch ↔ nvidia-ml-py wheel:
+# nvidia-ml-py ships per-driver-branch wheels keyed by major version
+# (13.x for r58x+). Picking a wheel from a newer branch than the host's
+# libnvidia-ml.so makes nvmlSystemGetConfComputeSettings read past the
+# struct → silent C-side segfault during Model init. The driver extra
+# pins the matching nvidia-ml-py so this crash can't happen.
 # ---------------------------------------------------------------------------
 
 [project.optional-dependencies]
-# GPU-variant extras: pin torch + per-variant tweaks.
-# TRT-LLM 1.2+ is a cu13 stack across the board. torch <=2.10.0a0,>=2.9.1
-# pin forces 2.9.1 (2.10.0 final is explicitly excluded). The three GPU
-# variants are wheel-identical today — the split is kept for parity with
-# vllm/sglang and so the B200 extra can diverge later.
-h100 = [
+driver-r580 = [
+  "tensorrt-llm==1.2.1",
   "torch==2.9.1",
   "torchvision==0.24.1",
   "torchaudio==2.9.1",
-  "mpi4py==4.0.1",
+  "nvidia-ml-py==13.580.126",
 ]
-h200 = [
+driver-r590 = [
+  "tensorrt-llm==1.2.1",
   "torch==2.9.1",
   "torchvision==0.24.1",
   "torchaudio==2.9.1",
-  "mpi4py==4.0.1",
+  "nvidia-ml-py==13.590.48",
 ]
-b200 = [
+driver-r595 = [
+  "tensorrt-llm==1.2.1",
   "torch==2.9.1",
   "torchvision==0.24.1",
   "torchaudio==2.9.1",
-  "mpi4py==4.0.1",
+  "nvidia-ml-py==13.595.45",
 ]
-
-# Host-driver extras: pin nvidia-ml-py to match libnvidia-ml.so ABI.
-# Pick exactly one that matches `nvidia-smi --query-gpu=driver_version`.
-driver-r580 = ["nvidia-ml-py==13.580.126"]  # verified on this host (580.126.09)
-driver-r590 = ["nvidia-ml-py==13.590.48"]
-driver-r595 = ["nvidia-ml-py==13.595.45"]
 
 [tool.uv]
 package = false
+# Exactly one driver extra at a time; uv refuses two from the same group.
 conflicts = [
-  [
-    { extra = "h100" },
-    { extra = "h200" },
-    { extra = "b200" },
-  ],
   [
     { extra = "driver-r580" },
     { extra = "driver-r590" },
@@ -103,17 +88,17 @@ explicit = true
 [tool.uv.sources]
 tensorrt-llm = { index = "nvidia" }
 torch = [
-  { index = "pytorch-cu130", extra = "h100" },
-  { index = "pytorch-cu130", extra = "h200" },
-  { index = "pytorch-cu130", extra = "b200" },
+  { index = "pytorch-cu130", extra = "driver-r580" },
+  { index = "pytorch-cu130", extra = "driver-r590" },
+  { index = "pytorch-cu130", extra = "driver-r595" },
 ]
 torchvision = [
-  { index = "pytorch-cu130", extra = "h100" },
-  { index = "pytorch-cu130", extra = "h200" },
-  { index = "pytorch-cu130", extra = "b200" },
+  { index = "pytorch-cu130", extra = "driver-r580" },
+  { index = "pytorch-cu130", extra = "driver-r590" },
+  { index = "pytorch-cu130", extra = "driver-r595" },
 ]
 torchaudio = [
-  { index = "pytorch-cu130", extra = "h100" },
-  { index = "pytorch-cu130", extra = "h200" },
-  { index = "pytorch-cu130", extra = "b200" },
+  { index = "pytorch-cu130", extra = "driver-r580" },
+  { index = "pytorch-cu130", extra = "driver-r590" },
+  { index = "pytorch-cu130", extra = "driver-r595" },
 ]
