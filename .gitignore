@@ -21,6 +21,17 @@ __pycache__/
 # benchmark inputs / outputs (kept locally)
 .data/
 
+# autoresearch run artifacts (logs, generated config.json, run dirs)
+# bench_results.tsv at repo root IS tracked — this only ignores transient
+# per-run output below.
+.bench_runs/
+
+# user-local query corpus (not redistributable)
+queries.csv
+
+# autoresearch loop state pointer
+configs/.current_experiment
+
 # nix-ld's ldconfig wrapper drops mktemp files in cwd
 tmp.??????????
 
