@@ -46,8 +46,15 @@
         stdenv.cc.cc.lib zlib glib libffi openssl ncurses xz
       ];
 
+      # Wheels built for cu12.x dlopen libcudart.so.12 / libnvrtc.so.12 etc.
+      # at engine startup; the torch wheels we install (vllm 0.19, sglang
+      # 0.5.10, trt-llm 1.2) do not bundle these. Putting cudaToolkit/lib
+      # on NIX_LD_LIBRARY_PATH makes nix-ld find them without forcing every
+      # YAML's env block to know the (non-deterministic) Nix store path.
       ldPath = sysDeps:
-        lib.makeLibraryPath (runtimeLibs ++ sysDeps) + ":" + driverLib;
+        lib.makeLibraryPath (runtimeLibs ++ sysDeps)
+        + ":${cudaToolkit}/lib"
+        + ":" + driverLib;
 
       cacheHook = ''
         : "''${LLM_CACHE_ROOT:=$HOME/.cache/llm-benchmark}"
