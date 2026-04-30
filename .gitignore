@@ -18,5 +18,8 @@ __pycache__/
 /tmp/
 *.log
 
+# benchmark inputs / outputs (kept locally)
+.data/
+
 # nix-ld's ldconfig wrapper drops mktemp files in cwd
 tmp.??????????

@@ -1,0 +1,9 @@
+[project]
+name = "llm-benchmark"
+version = "0.1.0"
+description = "Benchmark OpenAI-compatible chat completions endpoints"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx",
+    "pydantic>=2",
+]

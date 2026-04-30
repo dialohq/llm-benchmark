@@ -3,21 +3,18 @@
 Benchmark an OpenAI-compatible chat completions endpoint using queries sampled
 from queries.csv.
 
-Measures:
-  - TTFT (time to first streamed token)
-  - Total request latency
-  - Output tokens (when the server reports usage)
+Usage:
+  python bench_latency.py config.json
 
-Example:
-  python bench_latency.py \\
-      --base-url http://localhost:8000/v1 \\
-      -n 64 \\
-      --concurrency 1 2 4 8 16 32 \\
-      --model openai/gpt-oss-120b \\
-      --extra-body '{"reasoning_effort": "low"}' \\
-      --output report.json
+Each run creates a UUID-named subfolder inside cfg.output_dir containing:
+  - result.json  JSONL event log; each line is one of RequestEvent, ChunkEvent,
+                 FinalEvent, or ErrorEvent from schema.py. `t_s` on every event
+                 is relative to start-of-program (a single global t0).
+  - meta.json    Sidecar with `started_unix` and the full config (RunMeta in
+                 schema.py). Server hardware / run tags belong in cfg.metadata.
 
-Requires: httpx  (pip install httpx)
+Before the measured runs, one warmup request is sent to load the model. The
+warmup is consumed fully but not logged.
 """
 from __future__ import annotations
 
@@ -26,26 +23,39 @@ import asyncio
 import csv
 import json
 import random
-import statistics
 import sys
 import time
-from dataclasses import asdict, dataclass, field
-from typing import Any
+import uuid
+from pathlib import Path
+from typing import Any, Awaitable, Callable, TextIO
 
 import httpx
 
+from schema import (
+    ChatCompletionChunk,
+    ChatCompletionRequest,
+    ChunkEvent,
+    Config,
+    ErrorEvent,
+    FinalChatCompletionChunk,
+    FinalEvent,
+    LogEvent,
+    RequestEvent,
+    RunMeta,
+)
 
-# ---------------------------------------------------------------------------
-# Loading queries
-# ---------------------------------------------------------------------------
+
+def load_config(path: str) -> Config:
+    with open(path) as f:
+        return Config.model_validate(json.load(f))
+
 
 def load_queries(
     path: str,
     n: int,
     seed: int,
-    model_override: str | None,
+    model_override: str,
     extra_body: dict[str, Any],
-    drop_keys: list[str],
 ) -> list[dict[str, Any]]:
     # queries.csv has a single 'data' column whose value is a JSON string
     # representing an OpenAI-style chat completion request.
@@ -60,46 +70,64 @@ def load_queries(
     out: list[dict[str, Any]] = []
     for raw in sampled:
         payload = json.loads(raw)
-        for k in drop_keys:
-            payload.pop(k, None)
-        if model_override:
-            payload["model"] = model_override
+        payload["model"] = model_override
         # Merge extra_body on top — caller-provided overrides win.
         payload.update(extra_body)
         out.append(payload)
     return out
 
 
-# ---------------------------------------------------------------------------
-# Single-request timing
-# ---------------------------------------------------------------------------
-
-@dataclass
-class Result:
-    concurrency: int
-    request_idx: int
-    ttft_s: float | None
-    total_latency_s: float
-    prompt_tokens: int | None
-    completion_tokens: int | None
-    status: int | None
-    error: str | None
+LogFn = Callable[[LogEvent], Awaitable[None]]
+ClockFn = Callable[[], float]
 
 
-def _delta_has_token(chunk: dict[str, Any]) -> bool:
-    # Consider first "token" any delta with meaningful textual output or a
-    # reasoning / tool-call fragment. Empty role-only chunks don't count.
-    choices = chunk.get("choices") or []
-    if not choices:
-        return False
-    delta = choices[0].get("delta") or {}
-    for k in ("content", "reasoning", "reasoning_content"):
-        v = delta.get(k)
-        if isinstance(v, str) and v:
-            return True
-    if delta.get("tool_calls"):
-        return True
-    return False
+def make_clock(t0: float) -> ClockFn:
+    def now() -> float:
+        return time.perf_counter() - t0
+    return now
+
+
+def make_logger(file: TextIO, lock: asyncio.Lock) -> LogFn:
+    async def log(event: LogEvent) -> None:
+        line = event.model_dump_json()
+        async with lock:
+            file.write(line + "\n")
+    return log
+
+
+async def warmup(
+    url: str,
+    headers: dict[str, str],
+    model: str,
+    extra_body: dict[str, Any],
+    timeout: float,
+    verbose: bool,
+) -> None:
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Tell me a short story."}],
+        "stream": True,
+    }
+    body.update(extra_body)
+    timeout_cfg = httpx.Timeout(timeout, connect=timeout)
+    if verbose:
+        print("warming up...", file=sys.stderr)
+    try:
+        async with httpx.AsyncClient(timeout=timeout_cfg, http2=False) as client:
+            async with client.stream("POST", url, headers=headers, json=body) as resp:
+                if resp.status_code >= 400:
+                    text = (await resp.aread()).decode("utf-8", "replace")[:500]
+                    print(
+                        f"warmup failed: HTTP {resp.status_code}: {text}",
+                        file=sys.stderr,
+                    )
+                    return
+                async for _ in resp.aiter_lines():
+                    pass
+        if verbose:
+            print("warmup done", file=sys.stderr)
+    except Exception as e:
+        print(f"warmup failed: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 async def run_one(
@@ -108,61 +136,85 @@ async def run_one(
     headers: dict[str, str],
     payload: dict[str, Any],
     concurrency: int,
-    idx: int,
-) -> Result:
+    request_id: int,
+    now: ClockFn,
+    log: LogFn,
+) -> str | None:
     body = {**payload, "stream": True}
     # Ask for usage in the final chunk when the server supports it (OpenAI,
     # vLLM, llama.cpp server). Harmless if ignored.
     body.setdefault("stream_options", {"include_usage": True})
 
-    ttft: float | None = None
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    status: int | None = None
+    await log(RequestEvent(
+        t_s=now(),
+        request_id=request_id,
+        concurrency=concurrency,
+        body=ChatCompletionRequest.model_validate(body),
+    ))
 
-    start = time.perf_counter()
+    # The last chunk gets emitted as FinalEvent rather than ChunkEvent, so
+    # buffer-and-shift instead of emitting on arrival.
+    buf_chunk: ChatCompletionChunk | None = None
+    buf_t: float = 0.0
+    status: int | None = None
+    error: str | None = None
+
     try:
         async with client.stream("POST", url, headers=headers, json=body) as resp:
             status = resp.status_code
             if resp.status_code >= 400:
                 text = (await resp.aread()).decode("utf-8", "replace")[:500]
-                return Result(
-                    concurrency, idx, None, time.perf_counter() - start,
-                    None, None, status, f"HTTP {status}: {text}",
-                )
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].lstrip()
-                if data == "[DONE]":
-                    continue
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                if ttft is None and _delta_has_token(chunk):
-                    ttft = time.perf_counter() - start
-                usage = chunk.get("usage")
-                if usage:
-                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                    completion_tokens = usage.get(
-                        "completion_tokens", completion_tokens
-                    )
-        total = time.perf_counter() - start
-        return Result(
-            concurrency, idx, ttft, total, prompt_tokens, completion_tokens,
-            status, None,
-        )
+                error = f"HTTP {status}: {text}"
+            else:
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].lstrip()
+                    if data_str == "[DONE]":
+                        continue
+                    try:
+                        raw = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk_t = now()
+                    chunk = ChatCompletionChunk.model_validate(raw)
+                    if buf_chunk is not None:
+                        await log(ChunkEvent(
+                            t_s=buf_t,
+                            request_id=request_id,
+                            chunk=buf_chunk,
+                        ))
+                    buf_chunk = chunk
+                    buf_t = chunk_t
     except Exception as e:
-        return Result(
-            concurrency, idx, ttft, time.perf_counter() - start,
-            prompt_tokens, completion_tokens, status, f"{type(e).__name__}: {e}",
-        )
+        error = f"{type(e).__name__}: {e}"
 
+    if error is None and buf_chunk is not None and buf_chunk.usage is not None:
+        assert status is not None  # set on the success branch above
+        await log(FinalEvent(
+            t_s=buf_t,
+            request_id=request_id,
+            chunk=FinalChatCompletionChunk.model_validate(buf_chunk.model_dump()),
+            status=status,
+        ))
+        return None
 
-# ---------------------------------------------------------------------------
-# Concurrency runner
-# ---------------------------------------------------------------------------
+    if buf_chunk is not None:
+        await log(ChunkEvent(
+            t_s=buf_t, request_id=request_id, chunk=buf_chunk,
+        ))
+    if error is None:
+        # Stream closed without an error and without a final chunk that has
+        # usage — most likely the server didn't honor stream_options.include_usage.
+        error = "stream ended without a final chunk carrying usage"
+    await log(ErrorEvent(
+        t_s=now(),
+        request_id=request_id,
+        status=status,
+        error=error,
+    ))
+    return error
+
 
 async def run_at_concurrency(
     url: str,
@@ -170,7 +222,10 @@ async def run_at_concurrency(
     payloads: list[dict[str, Any]],
     concurrency: int,
     timeout: float,
-) -> tuple[list[Result], float]:
+    base_id: int,
+    now: ClockFn,
+    log: LogFn,
+) -> list[str | None]:
     # Size the pool to the concurrency so we don't queue inside httpx.
     limits = httpx.Limits(
         max_connections=concurrency,
@@ -180,199 +235,88 @@ async def run_at_concurrency(
     sem = asyncio.Semaphore(concurrency)
 
     async with httpx.AsyncClient(limits=limits, timeout=timeout_cfg, http2=False) as client:
-        async def bounded(i: int, p: dict[str, Any]) -> Result:
+        async def bounded(i: int, p: dict[str, Any]) -> str | None:
             async with sem:
-                return await run_one(client, url, headers, p, concurrency, i)
+                return await run_one(
+                    client, url, headers, p, concurrency, base_id + i, now, log,
+                )
 
-        t0 = time.perf_counter()
-        results = await asyncio.gather(
+        return await asyncio.gather(
             *(bounded(i, p) for i, p in enumerate(payloads))
         )
-        wallclock = time.perf_counter() - t0
-    return results, wallclock
 
 
-# ---------------------------------------------------------------------------
-# Summary / reporting
-# ---------------------------------------------------------------------------
-
-def _pcts(vals: list[float]) -> dict[str, float]:
-    if not vals:
-        return {}
-    vs = sorted(vals)
-    def q(p: float) -> float:
-        if len(vs) == 1:
-            return vs[0]
-        k = (len(vs) - 1) * p
-        lo, hi = int(k), min(int(k) + 1, len(vs) - 1)
-        return vs[lo] + (vs[hi] - vs[lo]) * (k - lo)
-    return {
-        "n": len(vs),
-        "mean": statistics.fmean(vs),
-        "min": vs[0],
-        "p50": q(0.5),
-        "p90": q(0.9),
-        "p95": q(0.95),
-        "p99": q(0.99),
-        "max": vs[-1],
-    }
-
-
-@dataclass
-class Summary:
-    concurrency: int
-    n: int
-    errors: int
-    wallclock_s: float
-    throughput_rps: float
-    ttft_s: dict[str, float] = field(default_factory=dict)
-    total_latency_s: dict[str, float] = field(default_factory=dict)
-    completion_tokens: dict[str, float] = field(default_factory=dict)
-    tokens_per_second: dict[str, float] = field(default_factory=dict)
-
-
-def summarize(results: list[Result], concurrency: int, wallclock: float) -> Summary:
-    ok = [r for r in results if r.error is None]
-    errs = [r for r in results if r.error is not None]
-    ttfts = [r.ttft_s for r in ok if r.ttft_s is not None]
-    totals = [r.total_latency_s for r in ok]
-    tokens = [r.completion_tokens for r in ok if r.completion_tokens]
-    tps = [
-        r.completion_tokens / r.total_latency_s
-        for r in ok
-        if r.completion_tokens and r.total_latency_s > 0
-    ]
-    return Summary(
-        concurrency=concurrency,
-        n=len(results),
-        errors=len(errs),
-        wallclock_s=wallclock,
-        throughput_rps=(len(ok) / wallclock) if wallclock > 0 else 0.0,
-        ttft_s=_pcts(ttfts),
-        total_latency_s=_pcts(totals),
-        completion_tokens=_pcts([float(t) for t in tokens]),
-        tokens_per_second=_pcts(tps),
-    )
-
-
-def print_summary(s: Summary) -> None:
-    line = (
-        f"concurrency={s.concurrency:>3}  n={s.n:>3}  errors={s.errors:>2}  "
-        f"wall={s.wallclock_s:6.2f}s  throughput={s.throughput_rps:5.2f} rps"
-    )
-    print(line)
-    for label, d in (
-        ("ttft   ", s.ttft_s),
-        ("total  ", s.total_latency_s),
-        ("tok/s  ", s.tokens_per_second),
-        ("out_tok", s.completion_tokens),
-    ):
-        if not d:
-            continue
-        parts = [
-            f"mean={d['mean']:.3f}",
-            f"p50={d['p50']:.3f}",
-            f"p90={d['p90']:.3f}",
-            f"p99={d['p99']:.3f}",
-            f"max={d['max']:.3f}",
-        ]
-        print(f"  {label}: " + "  ".join(parts))
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-async def main_async(args: argparse.Namespace) -> None:
-    extra_body = json.loads(args.extra_body) if args.extra_body else {}
+async def main_async(cfg: Config, message: str, t0: float, verbose: bool) -> None:
     queries = load_queries(
-        args.queries,
-        args.num_queries,
-        args.seed,
-        args.model,
-        extra_body,
-        drop_keys=args.drop_key,
+        cfg.queries,
+        cfg.num_queries,
+        cfg.seed,
+        cfg.model,
+        cfg.extra_body,
     )
     print(
-        f"loaded {len(queries)} queries from {args.queries} "
-        f"(seed={args.seed}, model={queries[0].get('model')})",
+        f"loaded {len(queries)} queries from {cfg.queries} "
+        f"(seed={cfg.seed}, model={queries[0].get('model')})",
         file=sys.stderr,
     )
 
-    url = args.base_url.rstrip("/") + "/chat/completions"
+    run_dir = Path(cfg.output_dir) / str(uuid.uuid4())
+    run_dir.mkdir(parents=True, exist_ok=False)
+    print(f"run dir: {run_dir}", file=sys.stderr)
+
+    meta = RunMeta(started_unix=time.time(), message=message, config=cfg)
+    (run_dir / "meta.json").write_text(meta.model_dump_json(indent=2))
+
+    url = cfg.base_url.rstrip("/") + "/chat/completions"
     headers = {
-        "Authorization": f"Bearer {args.api_key}",
+        "Authorization": f"Bearer {cfg.api_key}",
         "Content-Type": "application/json",
     }
 
-    summaries: list[Summary] = []
-    all_requests: list[dict[str, Any]] = []
+    await warmup(url, headers, cfg.model, cfg.extra_body, cfg.timeout, verbose)
 
-    for c in args.concurrency:
-        print(f"\n--- running concurrency={c} ---", file=sys.stderr)
-        # Reuse the same sampled queries at every level for comparability.
-        # If the server caches on exact prompts, pass --reshuffle to re-sample
-        # per level.
-        payloads = queries
-        if args.reshuffle:
-            rng = random.Random(args.seed + c)
-            payloads = rng.sample(queries, len(queries))
+    now = make_clock(t0)
 
-        results, wallclock = await run_at_concurrency(
-            url, headers, payloads, c, args.timeout
-        )
-        s = summarize(results, c, wallclock)
-        summaries.append(s)
-        all_requests.extend(asdict(r) for r in results)
-        print_summary(s)
+    with open(run_dir / "result.json", "w") as f:
+        lock = asyncio.Lock()
+        log = make_logger(f, lock)
 
-        # Surface the first few errors so misconfig is obvious.
-        errs = [r for r in results if r.error]
-        for r in errs[:3]:
-            print(f"  error idx={r.request_idx}: {r.error}", file=sys.stderr)
+        next_id = 0
+        for c in cfg.concurrency:
+            print(f"\n--- running concurrency={c} ---", file=sys.stderr)
+            errors = await run_at_concurrency(
+                url, headers, queries, c, cfg.timeout, next_id, now, log,
+            )
+            next_id += len(queries)
 
-    if args.output:
-        report = {
-            "config": {k: v for k, v in vars(args).items()},
-            "summaries": [asdict(s) for s in summaries],
-            "requests": all_requests,
-        }
-        with open(args.output, "w") as f:
-            json.dump(report, f, indent=2)
-        print(f"\nwrote {args.output}", file=sys.stderr)
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--queries", default="queries.csv", help="path to queries.csv")
-    p.add_argument("--base-url", default="http://localhost:8000/v1",
-                   help="OpenAI-compatible base URL (must include /v1 if the server expects it)")
-    p.add_argument("--api-key", default="sk-noop")
-    p.add_argument("-n", "--num-queries", type=int, default=64,
-                   help="how many queries to sample from the CSV")
-    p.add_argument("--concurrency", type=int, nargs="+",
-                   default=[1, 2, 4, 8, 16, 32])
-    p.add_argument("--model", default=None,
-                   help="override the 'model' field on every sampled request")
-    p.add_argument("--extra-body", default=None,
-                   help="JSON object merged into every request body "
-                        "(e.g. '{\"reasoning_effort\":\"low\",\"temperature\":0}')")
-    p.add_argument("--drop-key", action="append", default=["provider"],
-                   help="keys to strip from each payload (repeatable). "
-                        "Default drops 'provider' since local servers don't want it.")
-    p.add_argument("--timeout", type=float, default=300.0)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--reshuffle", action="store_true",
-                   help="re-sample the order per concurrency level (helps if "
-                        "the server caches exact prompts across runs)")
-    p.add_argument("--output", default=None,
-                   help="write full JSON report (summaries + per-request)")
-    return p.parse_args()
+            errs = [e for e in errors if e]
+            print(
+                f"  {len(queries) - len(errs)}/{len(queries)} ok",
+                file=sys.stderr,
+            )
+            # Surface the first few errors so misconfig is obvious.
+            for e in errs[:3]:
+                print(f"  error: {e}", file=sys.stderr)
 
 
 def main() -> None:
+    t0 = time.perf_counter()
+    p = argparse.ArgumentParser(
+        usage='python bench_latency.py config.json "<message>" [-v]'
+    )
+    p.add_argument("config", help="path to config.json")
+    p.add_argument(
+        "message",
+        help="free-form description of the run, e.g. 'sglang with speculative decoding'",
+    )
+    p.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="print warmup status to stderr",
+    )
+    args = p.parse_args()
+    cfg = load_config(args.config)
     try:
-        asyncio.run(main_async(parse_args()))
+        asyncio.run(main_async(cfg, args.message, t0, args.verbose))
     except KeyboardInterrupt:
         sys.exit(130)
 
