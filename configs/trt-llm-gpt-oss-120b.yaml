@@ -1,0 +1,36 @@
+description: |
+  trtllm-serve openai/gpt-oss-120b, TP=2, --backend pytorch (skips the
+  TensorRT engine-build step). Mirrors the former bin/smoke-trt-llm
+  flag combo. Run inside `nix develop .#trt-llm`.
+engine: trt-llm
+cmd: trtllm-serve
+args:
+  - openai/gpt-oss-120b
+  - --backend
+  - pytorch
+  - --tp_size
+  - "2"
+  - --max_batch_size
+  - "4"
+  - --max_seq_len
+  - "4096"
+cwd: trt-llm
+venv: trt-llm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/trt-llm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT

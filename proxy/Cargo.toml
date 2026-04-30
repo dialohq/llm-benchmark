@@ -1,0 +1,36 @@
+[package]
+name = "bench-proxy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "bench-proxy"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "signal", "net", "io-util", "sync", "fs", "time"] }
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+http = "1"
+bytes = "1"
+futures = "0.3"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+walkdir = "2"
+libc = "0.2"
+indexmap = { version = "2", features = ["serde"] }

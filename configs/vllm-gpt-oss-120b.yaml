@@ -1,0 +1,34 @@
+description: |
+  vllm serve openai/gpt-oss-120b, TP=2, --enforce-eager. Mirrors the
+  former bin/smoke-vllm flag combo. Run inside `nix develop .#vllm`.
+engine: vllm
+cmd: vllm
+args:
+  - serve
+  - openai/gpt-oss-120b
+  - --tensor-parallel-size
+  - "2"
+  - --enforce-eager
+  - --gpu-memory-utilization
+  - "0.80"
+  - --max-model-len
+  - "2048"
+cwd: vllm
+venv: vllm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/vllm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT

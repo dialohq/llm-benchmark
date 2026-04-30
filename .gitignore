@@ -23,3 +23,9 @@ __pycache__/
 
 # nix-ld's ldconfig wrapper drops mktemp files in cwd
 tmp.??????????
+
+# Rust build outputs
+proxy/target/
+
+# Local Claude Code state
+.claude/
