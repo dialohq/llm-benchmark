@@ -206,9 +206,12 @@
           # unversioned PFN_* macro aliases cu13 dropped — flashinfer 0.6.6's
           # bundled cutlass needs them; #include_next falls through to cu13's
           # real cudaTypedefs.h for everything else), then cu13 venv includes,
-          # then cudnn. Pulling all of cu12 cudart's include onto CPATH
+          # then cudnn, then CUDA_HOME's include (for `<nv/target>` etc. that
+          # cu13's cuda_fp16.h pulls in via CCCL — sglang's tvm-ffi JIT
+          # doesn't pass -I''${CUDA_HOME}/include explicitly so we route it
+          # through CPATH). Pulling all of cu12 cudart's include onto CPATH
           # instead would shadow cu13's cooperative_groups, cublasLt, etc.
-          export CPATH="${cu13TypedefShim}/include:$NV/cu${cuMajor}/include:$NV/cudnn/include:''${CPATH:-}"
+          export CPATH="${cu13TypedefShim}/include:$NV/cu${cuMajor}/include:$NV/cudnn/include:${cudaToolkit}/include:''${CPATH:-}"
           echo "✓ ${engineDir}: cu${cuMajor} (jit/torch) + cu${cudaMajorRuntime} (vllm._C runtime) verified" >&2
         else
           echo "ℹ ${engineDir}/.venv missing under $_root — run \`uv sync\` to materialize cu${cuMajor} libs" >&2
