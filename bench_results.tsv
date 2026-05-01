@@ -23,3 +23,4 @@ iteration	commit	tok_s	status	yaml	description
 21	58a6c21	222.1339	discard	trt-llm-b200-bs1-eagle3-bs14.yaml	EAGLE3 k=3 + cuda_graph batch_sizes=[1,4] (vs iter-19's just max_batch_size=4): 222.13 — basically same as iter-19 (225.37); cuda graph capture wasn't the root cause
 22	583064d	243.1504	discard	trt-llm-b200-bs1-eagle3-k2.yaml	TRT-LLM EAGLE3 k=2 short-context: 243.15 tok/s — better than k=3 (222) but still -37.4% vs baseline (388.55)
 23	b43dc06	462.5776	keep	trt-llm-b200-bs1-eagle3-default-draft.yaml	TRT-LLM EAGLE3 k=3 with nvidia/gpt-oss-120b-Eagle3 (default, NOT -short-context): 462.58 tok/s — NEW BEST, +19.05% over trt-llm baseline, 4.75x over original
+24	e1bc41a	219.8096	discard	trt-llm-b200-bs1-eagle3-v2.yaml	TRT-LLM EAGLE3 k=3 with nvidia/gpt-oss-120b-Eagle3-v2 draft: 219.81 — worse than default Eagle3 (462.58); v2 doesn't help here
