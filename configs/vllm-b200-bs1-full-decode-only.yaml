@@ -21,7 +21,7 @@ args:
   - --speculative-config
   - '{"method":"eagle3","model":"nvidia/gpt-oss-120b-Eagle3","num_speculative_tokens":2}'
   - --compilation-config
-  - '{"custom_ops":["+rms_norm"],"pass_config":{"fuse_allreduce_rms":true,"eliminate_noops":true},"cudagraph_mode":"FULL_DECODE_ONLY","compile_sizes":[1]}'
+  - '{"custom_ops":["+rms_norm"],"pass_config":{"fuse_allreduce_rms":true,"eliminate_noops":true},"cudagraph_mode":"FULL_DECODE_ONLY"}'
 cwd: vllm
 venv: vllm/.venv
 warmup: 3
