@@ -2,3 +2,4 @@ iteration	commit	tok_s	status	yaml	description
 0	1ad4da0	97.3754	keep	vllm-b200-bs1-baseline.yaml	TP=1 enforce-eager max-num-seqs=1 — iter 0 baseline (re-verified on current flake)
 1	8e55e5e	223.6686	keep	vllm-b200-bs1-cuda-graphs.yaml	drop --enforce-eager → CUDA graphs at BS=1; 2.30x over baseline
 2	3fdcd86	133.6132	discard	vllm-b200-bs1-ngram-spec.yaml	ngram spec-decoding (k=5,window=2-4) REGRESSED — likely defeats BS=1 CUDA graphs / verify pass overhead exceeds spec hit gain
+3	d397158	221.5728	discard	vllm-b200-bs1-kv-fp8.yaml	kv-cache fp8: within noise of cuda-graphs (Δ -0.94%); simpler wins → discard

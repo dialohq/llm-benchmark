@@ -1,0 +1,43 @@
+description: |
+  vllm serve openai/gpt-oss-120b on a single B200, TP=1, CUDA graphs on.
+  Iter-3 deviation from iter-1 (cuda-graphs): switch KV cache to fp8.
+  At BS=1 the decode step is memory-bound on KV reads (each step touches
+  the full past KV of one stream); halving byte-width per element should
+  cut KV bandwidth roughly in half. Weights stay at the model's native
+  MXFP4 quantization — only the KV cache dtype changes.
+engine: vllm
+cmd: vllm
+args:
+  - serve
+  - openai/gpt-oss-120b
+  - --tensor-parallel-size
+  - "1"
+  - --gpu-memory-utilization
+  - "0.90"
+  - --max-model-len
+  - "4096"
+  - --max-num-seqs
+  - "1"
+  - --kv-cache-dtype
+  - fp8
+cwd: vllm
+venv: vllm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/vllm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"

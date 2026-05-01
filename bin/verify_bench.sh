@@ -119,7 +119,16 @@ done
   > "$BENCH_LOG" 2>&1
 
 # bench_latency.py creates a UUID subdir under output_dir; find result.json.
-RESULT_JSON=$(find "$RUN_ROOT" -mindepth 2 -maxdepth 2 -name result.json 2>/dev/null | head -1 || true)
+# Retry briefly: even though the bench command was foreground, observed in
+# practice that find can return empty immediately after python exits while
+# the OS hasn't yet flushed the new dirent into the parent inode listing
+# (notably on overlayfs/bind-mounted setups). 5x500ms is plenty.
+RESULT_JSON=""
+for _ in 1 2 3 4 5; do
+  RESULT_JSON=$(find "$RUN_ROOT" -mindepth 2 -maxdepth 2 -name result.json 2>/dev/null | head -1 || true)
+  [ -n "$RESULT_JSON" ] && [ -f "$RESULT_JSON" ] && break
+  sleep 0.5
+done
 if [ -z "$RESULT_JSON" ] || [ ! -f "$RESULT_JSON" ]; then
   echo "[verify] no result.json in $RUN_ROOT — tail of bench.log:" >&2
   tail -80 "$BENCH_LOG" >&2 || true
