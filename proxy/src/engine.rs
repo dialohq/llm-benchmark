@@ -48,7 +48,28 @@ pub fn spawn(cfg: &ResolvedConfig, repo_root: &Path, child_port: u16) -> Result<
     }
     tracing::info!("  argv: {} {}", cfg.cmd, argv.join(" "));
 
-    let mut cmd = Command::new(&cfg.cmd);
+    // Resolve cfg.cmd against the YAML's env.PATH (not the parent process's
+    // PATH). Without this, `cmd: vllm` only works if the launcher already
+    // happens to have the engine's venv/bin on its PATH — which the devshells
+    // intentionally don't, so the YAML's env.PATH stops being authoritative.
+    let cmd_program: std::path::PathBuf = {
+        let raw = Path::new(&cfg.cmd);
+        if raw.is_absolute() {
+            raw.to_path_buf()
+        } else if cfg.cmd.contains('/') {
+            cwd.join(raw)
+        } else if let Some(path) = cfg.child_env.get("PATH") {
+            path.split(':')
+                .filter(|p| !p.is_empty())
+                .map(|dir| Path::new(dir).join(&cfg.cmd))
+                .find(|c| c.is_file())
+                .unwrap_or_else(|| raw.to_path_buf())
+        } else {
+            raw.to_path_buf()
+        }
+    };
+
+    let mut cmd = Command::new(&cmd_program);
     cmd.args(&argv)
         .current_dir(&cwd)
         .env_clear()
@@ -60,8 +81,9 @@ pub fn spawn(cfg: &ResolvedConfig, repo_root: &Path, child_port: u16) -> Result<
 
     let child = cmd.spawn().with_context(|| {
         format!(
-            "spawning child `{}` (PATH from YAML env: {:?})",
+            "spawning child `{}` (resolved={}, PATH from YAML env: {:?})",
             cfg.cmd,
+            cmd_program.display(),
             cfg.child_env.get("PATH")
         )
     })?;
