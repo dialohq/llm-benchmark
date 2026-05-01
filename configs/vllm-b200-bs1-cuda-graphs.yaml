@@ -1,8 +1,8 @@
 description: |
-  vllm serve openai/gpt-oss-120b on a single B200 (TP=1).
-  Baseline for autoresearch tok/s @ batch-1 sweep — conservative defaults
-  (--enforce-eager, no spec decode, no kv-cache fp8). Subsequent
-  experiments deviate one knob at a time.
+  vllm serve openai/gpt-oss-120b on a single B200, TP=1.
+  Iter-1 deviation from baseline: drop --enforce-eager so vllm captures
+  CUDA graphs at BS=1 — typically the highest-leverage single-stream
+  win because per-step Python+CUDA-launch overhead disappears.
 engine: vllm
 cmd: vllm
 args:
@@ -10,7 +10,6 @@ args:
   - openai/gpt-oss-120b
   - --tensor-parallel-size
   - "1"
-  - --enforce-eager
   - --gpu-memory-utilization
   - "0.90"
   - --max-model-len

@@ -25,19 +25,20 @@
       # their own NCCL via wheels).
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
-      # nixpkgs cuda packages are multi-output: the default `out` is often a
-      # near-empty stub and the real content lives in `lib` (.so), `include`
-      # (headers), `static` (.a), and `stubs` (link-time stubs). flashinfer
-      # JIT-compiles fp4_quantization.cu at first engine boot and needs
-      # cublasLt.h + libcublasLt.so + cudnn etc., so we pull every output
-      # of every CUDA lib we need into one merged tree.
+      # cudaToolkit only carries the compiler and bare minimum nvcc internals.
+      # The engines (vllm 0.19, sglang 0.5.10, trt-llm 1.2) are installed via
+      # uv from the cu13 PyTorch index, and their wheels bundle a full
+      # cu13 toolkit under <venv>/lib/python3.12/site-packages/nvidia/cu13/
+      # (libcudart.so.13, libcublasLt.so.13, full headers). The per-engine
+      # YAML's env block points LIBRARY_PATH / CPATH / NIX_LD_LIBRARY_PATH at
+      # those paths so flashinfer's JIT compiler links against cu13 — matching
+      # what torch loads at runtime. Mixing cu12 (nix) and cu13 (wheel) libs
+      # causes ABI mismatches in the JIT-compiled .so.
       cudaPkgs = with pkgs.cudaPackages; [
-        cuda_nvcc cuda_cudart cuda_cccl cuda_nvrtc
-        libnvjitlink libcublas libcusparse libcusolver
-        libcurand libcufft cudnn
+        cuda_nvcc cuda_cudart cuda_cccl
       ];
       cudaToolkit = pkgs.symlinkJoin {
-        name = "cuda-12.9-merged";
+        name = "cuda-12.9-nvcc-only";
         paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cudaPkgs;
       };
 
@@ -57,15 +58,8 @@
         stdenv.cc.cc.lib zlib glib libffi openssl ncurses xz
       ];
 
-      # Wheels built for cu12.x dlopen libcudart.so.12 / libnvrtc.so.12 etc.
-      # at engine startup; the torch wheels we install (vllm 0.19, sglang
-      # 0.5.10, trt-llm 1.2) do not bundle these. Putting cudaToolkit/lib
-      # on NIX_LD_LIBRARY_PATH makes nix-ld find them without forcing every
-      # YAML's env block to know the (non-deterministic) Nix store path.
       ldPath = sysDeps:
-        lib.makeLibraryPath (runtimeLibs ++ sysDeps)
-        + ":${cudaToolkit}/lib"
-        + ":" + driverLib;
+        lib.makeLibraryPath (runtimeLibs ++ sysDeps) + ":" + driverLib;
 
       cacheHook = ''
         : "''${LLM_CACHE_ROOT:=$HOME/.cache/llm-benchmark}"
@@ -75,6 +69,27 @@
         export VLLM_CACHE_ROOT="$LLM_CACHE_ROOT/vllm"
         mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" \
                  "$FLASHINFER_WORKSPACE_BASE" "$VLLM_CACHE_ROOT"
+      '';
+
+      # The vllm / sglang / trt-llm wheels ship a complete cu13 stack under
+      # <venv>/lib/python3.12/site-packages/nvidia/cu13/ (libcudart.so.13,
+      # libcublasLt.so.13, headers, etc.) plus cudnn.so.9 under nvidia/cudnn/
+      # and nccl under nvidia/nccl/. Torch loads these directly at import time,
+      # but flashinfer's runtime JIT (the nvcc shell-out at first engine boot)
+      # also needs them visible to the linker AND the C++ preprocessor. This
+      # hook is a per-engine helper that the engine's shellHook calls with
+      # its own venv path.
+      cu13EnvHook = engineDir: ''
+        if [ -d "$PWD/${engineDir}/.venv" ]; then
+          NV="$PWD/${engineDir}/.venv/lib/python3.12/site-packages/nvidia"
+          # Runtime dlopen via nix-ld: cu13 first so libcudart.so.13 wins
+          # over any cu12 stragglers.
+          export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:''${NIX_LD_LIBRARY_PATH:-}"
+          # JIT linker (ld inside flashinfer) reads LIBRARY_PATH for -lcudart.
+          export LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
+          # JIT compiler (cc / nvcc -isystem) reads CPATH for cublasLt.h etc.
+          export CPATH="$NV/cu13/include:$NV/cudnn/include:''${CPATH:-}"
+        fi
       '';
 
       # Thin attribute-merging helper around mkShellNoCC. Sets the env
@@ -104,6 +119,7 @@
           name = "vllm";
           packages = common ++ [ cudaToolkit ];
           NIX_LD_LIBRARY_PATH = ldPath [ ];
+          shellHook = cacheHook + cu13EnvHook "vllm";
         };
 
         sglang = mkShell {
@@ -119,6 +135,7 @@
           NIX_LD_LIBRARY_PATH = ldPath (with pkgs; [
             numactl openmpi czmq zeromq
           ]);
+          shellHook = cacheHook + cu13EnvHook "sglang";
         };
 
         trt-llm = mkShell {
@@ -126,7 +143,7 @@
           packages = common ++ (with pkgs; [ cudaToolkit openmpi zeromq ]);
           MPICC = "${pkgs.openmpi}/bin/mpicc";
           NIX_LD_LIBRARY_PATH = ldPath (with pkgs; [ openmpi zeromq ]);
-          shellHook = cacheHook + ''
+          shellHook = cacheHook + cu13EnvHook "trt-llm" + ''
             # tensorrt-llm 1.2 cu13 stack references CUDA Driver API
             # symbols (cuKernelGetName, added in CUDA 12.4) that aren't
             # in libcuda.so on r5xx (≤r575). Refuse shell entry rather
