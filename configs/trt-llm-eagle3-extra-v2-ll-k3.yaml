@@ -1,0 +1,16 @@
+# Eagle3-v2 + NVIDIA low-latency flags. k=3 — NVIDIA's blog11 setting,
+# expected sweet spot if v2's higher acceptance length pays for the
+# larger verify shape.
+speculative_config:
+  decoding_type: Eagle3
+  max_draft_len: 3
+  speculative_model_dir: nvidia/gpt-oss-120b-Eagle3-v2
+  eagle3_one_model: true
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 4]
+enable_min_latency: true
+enable_autotuner: false
+stream_interval: 20
+num_postprocess_workers: 2
