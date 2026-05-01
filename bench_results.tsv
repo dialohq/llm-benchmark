@@ -44,3 +44,4 @@ iteration	commit	tok_s	status	yaml	description
 42	482366f	0	crash	trt-llm-b200-bs1-lookahead.yaml	TRT-LLM Lookahead decoding: rejected — 'Speculation type Lookahead does not support backend pytorch'. Requires TRT-engine build path which isn't available for gpt-oss MXFP4.
 43	6fbc94a	421.6275	discard	trt-llm-b200-bs1-eagle3-k2-compile.yaml	TRT-LLM EAGLE3 + piecewise CUDA graph + userbuffers (no Inductor — Inductor crashes on custom MXFP4 kernel via FakeTensor): 421.63 — Δ -11.7% vs iter-26; piecewise alone hurts
 44	097456a	460.9369	discard	vllm-b200-bs1-full-decode-only.yaml	vLLM cudagraph_mode=FULL_DECODE_ONLY (vs default FULL_AND_PIECEWISE): 460.94 — Δ -3.54% vs iter-38 best; full-decode-only graph can't cleanly capture FlashInfer TRTLLM-gen attention
+45	4a17678	250.7209	discard	vllm-b200-bs1-inductor-graph-partition.yaml	vLLM use_inductor_graph_partition:true on iter-38 base: 250.72 — Δ -47.5% massive regression; partition fights with EAGLE3+MoE custom kernels
