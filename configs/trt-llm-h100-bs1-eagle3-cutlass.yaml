@@ -1,0 +1,48 @@
+description: |
+  H100 TP=1 + force moe_config.backend=CUTLASS. Default trt-llm 1.3
+  fell back to TritonFusedMoE on Hopper MXFP4 (iter-J H100 = 141.73
+  tok/s). CUTLASS path is the Hopper-native MXFP4 grouped-GEMM —
+  expected to recover most of the gap to vllm Marlin (246 tok/s).
+  Also: pad cuda_graph batch_sizes=[1,2,3,4] for EAGLE3 verify shapes,
+  stream_interval=10, enable_block_reuse=false (per HF Eagle3 card).
+engine: trt-llm
+cmd: mpirun
+args:
+  - --allow-run-as-root
+  - -np
+  - "1"
+  - trtllm-serve
+  - /root/.cache/huggingface/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+  - --backend
+  - pytorch
+  - --tp_size
+  - "1"
+  - --max_batch_size
+  - "8"
+  - --max_seq_len
+  - "4096"
+  - --extra_llm_api_options
+  - /projects/llm-benchmark/configs/trt-llm-eagle3-extra-h100.yaml
+cwd: trt-llm
+venv: trt-llm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/trt-llm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"
+  TRTLLM_ENABLE_PDL: "1"
