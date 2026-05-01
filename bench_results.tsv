@@ -1,3 +1,3 @@
 iteration	commit	tok_s	status	yaml	description
-0	cdb7fd4	97.3754	keep	vllm-b200-bs1-baseline.yaml	TP=1 enforce-eager max-num-seqs=1 — iter 0 baseline (re-verified on current flake)
-1	b1bee1f	223.6686	keep	vllm-b200-bs1-cuda-graphs.yaml	drop --enforce-eager → CUDA graphs at BS=1; 2.30x over baseline
+0	1ad4da0	97.3754	keep	vllm-b200-bs1-baseline.yaml	TP=1 enforce-eager max-num-seqs=1 — iter 0 baseline (re-verified on current flake)
+1	8e55e5e	223.6686	keep	vllm-b200-bs1-cuda-graphs.yaml	drop --enforce-eager → CUDA graphs at BS=1; 2.30x over baseline
