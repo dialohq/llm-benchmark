@@ -8,7 +8,9 @@ requires-python = ">=3.10,<3.14"
 dependencies = [
   "huggingface-hub",
   "hf-transfer",
-  "mpi4py==4.0.1",
+  # mpi4py 4.0.1 hits AttributeError: module 'distutils.log' has no attribute
+  # 'warning' under setuptools >=80 / Python 3.12; 4.1.x drops the call.
+  "mpi4py>=4.1.1",
 ]
 
 # ---------------------------------------------------------------------------

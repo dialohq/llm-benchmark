@@ -58,11 +58,31 @@
         paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cudaToolkitPkgs;
       };
       # Separate cu12 runtime path. Reachable only via NIX_LD_LIBRARY_PATH
-      # (runtime dlopen of libcudart.so.12 by vllm._C wheel) — never on
-      # LIBRARY_PATH or -L flags. cuda_cudart is multi-output; the `.lib`
+      # (runtime dlopen of libcudart.so.12 by vllm._C wheel; libnvrtc.so.12
+      # by sglang's bundled triton kernels) — never on LIBRARY_PATH or
+      # -L flags. cuda_cudart and cuda_nvrtc are multi-output; the `.lib`
       # output (when present) holds the .so files; otherwise resolve the
-      # named output via getOutput.
+      # named output via getOutput. cuda_cudart's `dev` output (include/)
+      # is colocated with `out` so cu12RuntimeLibs/include resolves too —
+      # the cu13TypedefShim derivation depends on that path.
       cu12RuntimeLibs = lib.getOutput "lib" pkgs.cudaPackages.cuda_cudart;
+      # cu12 libs sglang's bundled sgl_kernel + flashinfer kernels dlopen at
+      # runtime. We deliberately keep these *outside* CUDA_HOME so the JIT
+      # linker doesn't pick up cu12 .so for `-lcudart` / `-lcublas` (cu13
+      # libs in LIBRARY_PATH must win for ABI compat with torch). Reachable
+      # only via NIX_LD_LIBRARY_PATH for runtime dlopen.
+      cu12RuntimeLibsExtra = pkgs.symlinkJoin {
+        name = "cu12-runtime-extra";
+        paths = with pkgs.cudaPackages; [
+          (lib.getOutput "lib" cuda_nvrtc)
+          (lib.getOutput "lib" libcublas)
+          (lib.getOutput "lib" libcusparse)
+          (lib.getOutput "lib" libcusolver)
+          (lib.getOutput "lib" libcurand)
+          (lib.getOutput "lib" libcufft)
+          (lib.getOutput "lib" cuda_cupti)
+        ];
+      };
 
       # cu13's cudaTypedefs.h dropped the unversioned `PFN_X` macro aliases
       # that cu12 carried (PFN_X is now only present as `PFN_X_v12000`).
@@ -180,7 +200,7 @@
                     "$NV/cu${cuMajor}/lib/lib''${soname}.so" 2>/dev/null || true
             fi
           done
-          export NIX_LD_LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12RuntimeLibs}/lib:''${NIX_LD_LIBRARY_PATH:-}"
+          export NIX_LD_LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12RuntimeLibs}/lib:${cu12RuntimeLibsExtra}/lib:''${NIX_LD_LIBRARY_PATH:-}"
           export LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
           # CPATH order: typedef shim FIRST (its cudaTypedefs.h adds the
           # unversioned PFN_* macro aliases cu13 dropped — flashinfer 0.6.6's
