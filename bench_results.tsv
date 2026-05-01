@@ -15,3 +15,4 @@ iteration	commit	tok_s	status	yaml	description
 13	bd55bd7	373.1969	discard	vllm-b200-bs1-no-e8m0.yaml	VLLM_USE_DEEP_GEMM_E8M0=0: Δ +0.54% vs iter-4 (within noise); discard per simpler-wins-on-equal-results
 14	b203a32	343.4120	keep	sglang-b200-bs1-baseline.yaml	sglang TP=1 trtllm_mha cuda-graph-bs=1: 343.41 tok/s — cross-engine baseline; vLLM iter-4 (371.21) still wins by 8.1%
 15	ce889cb	373.3223	discard	vllm-b200-bs1-latency-moe.yaml	VLLM_FLASHINFER_MOE_BACKEND=latency on top of MXFP4_MXFP8: backend selection unchanged (MXFP4_MXFP8 path overrides), Δ +0.57% noise
+16	4db4995	248.5279	discard	vllm-b200-bs1-eagle3.yaml	vLLM EAGLE3 (RedHatAI draft, k=3) on top of iter-4: Δ -33.0% — same pattern as ngram, spec invalidates BS=1 CUDA graphs in vLLM
