@@ -26,3 +26,4 @@ iteration	commit	tok_s	status	yaml	description
 24	e1bc41a	219.8096	discard	trt-llm-b200-bs1-eagle3-v2.yaml	TRT-LLM EAGLE3 k=3 with nvidia/gpt-oss-120b-Eagle3-v2 draft: 219.81 — worse than default Eagle3 (462.58); v2 doesn't help here
 25	d3a8902	218.6353	discard	trt-llm-b200-bs1-eagle3-throughput.yaml	TRT-LLM EAGLE3 k=3 with nvidia/gpt-oss-120b-Eagle3-throughput draft: 218.64 — also regresses; only default Eagle3 draft wins
 26	9be5a9f	477.6748	keep	trt-llm-b200-bs1-eagle3-default-k2.yaml	TRT-LLM EAGLE3 default draft k=2: 477.67 tok/s — NEW BEST, +3.26% over k=3 (iter-23); smaller verify wins, 4.90x baseline
+27	9950d76	434.6962	discard	trt-llm-b200-bs1-eagle3-default-k4.yaml	TRT-LLM EAGLE3 default draft k=4: 434.70 — Δ -9.0% vs k=2; verify cost grows faster than acceptance gain past k=2
