@@ -46,16 +46,23 @@
       # caused the iter-0 ImportError loop on this branch.
       cudaMajorRuntime = "12";    # vllm._C wheel is cu12-built
       cudaMajorJit     = "13";    # torch wheel + flashinfer JIT use cu13
-      cu12Pkgs = with pkgs.cudaPackages; [
-        cuda_nvcc cuda_cudart cuda_cccl
-      ];
-      cu12Toolkit = pkgs.symlinkJoin {
-        name = "cuda-12.9-nvcc+runtime";
-        paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cu12Pkgs;
+      # cudaToolkit is the *compiler*-only path. Keeping libs out of here is
+      # deliberate: flashinfer's run_ninja hard-codes
+      #   `-L${CUDA_HOME}/lib64 -lcudart`
+      # so any libcudart.so.12 in cudaToolkit/lib would beat LIBRARY_PATH=cu13.
+      # Empty lib/lib64 ensures `-lcudart` falls through to LIBRARY_PATH where
+      # cu13 wins, producing a JIT .so that's ABI-compatible with torch.
+      cudaToolkitPkgs = with pkgs.cudaPackages; [ cuda_nvcc cuda_cccl ];
+      cudaToolkit = pkgs.symlinkJoin {
+        name = "cuda-12.9-nvcc-only";
+        paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cudaToolkitPkgs;
       };
-      # Kept under the old name for the rest of the file; the value still
-      # provides nvcc + cu12 runtime libs (libcudart.so.12 etc.).
-      cudaToolkit = cu12Toolkit;
+      # Separate cu12 runtime path. Reachable only via NIX_LD_LIBRARY_PATH
+      # (runtime dlopen of libcudart.so.12 by vllm._C wheel) — never on
+      # LIBRARY_PATH or -L flags. cuda_cudart is multi-output; the `.lib`
+      # output (when present) holds the .so files; otherwise resolve the
+      # named output via getOutput.
+      cu12RuntimeLibs = lib.getOutput "lib" pkgs.cudaPackages.cuda_cudart;
 
       # Note: no python here. UV_PYTHON_PREFERENCE=only-managed makes uv
       # download python-build-standalone, whose interpreter's PT_INTERP
@@ -114,7 +121,7 @@
           NV="$_root/${engineDir}/.venv/lib/python3.12/site-packages/nvidia"
           for need in "$NV/cu${cuMajor}/lib/libcudart.so.${cuMajor}" \
                       "$NV/cu${cuMajor}/include/cublasLt.h" \
-                      "${cudaToolkit}/lib/libcudart.so.${cudaMajorRuntime}"; do
+                      "${cu12RuntimeLibs}/lib/libcudart.so.${cudaMajorRuntime}"; do
             if [ ! -e "$need" ]; then
               echo "✘ ${engineDir} devshell: missing $need" >&2
               echo "  cu${cuMajor} venv libs come from \`uv sync\` in ${engineDir}/." >&2
@@ -122,7 +129,7 @@
               return 1
             fi
           done
-          export NIX_LD_LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:$NV/nccl/lib:${cudaToolkit}/lib:''${NIX_LD_LIBRARY_PATH:-}"
+          export NIX_LD_LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12RuntimeLibs}/lib:''${NIX_LD_LIBRARY_PATH:-}"
           export LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
           export CPATH="$NV/cu${cuMajor}/include:$NV/cudnn/include:''${CPATH:-}"
           echo "✓ ${engineDir}: cu${cuMajor} (jit/torch) + cu${cudaMajorRuntime} (vllm._C runtime) verified" >&2
