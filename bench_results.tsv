@@ -28,3 +28,4 @@ iteration	commit	tok_s	status	yaml	description
 26	9be5a9f	477.6748	keep	trt-llm-b200-bs1-eagle3-default-k2.yaml	TRT-LLM EAGLE3 default draft k=2: 477.67 tok/s — NEW BEST, +3.26% over k=3 (iter-23); smaller verify wins, 4.90x baseline
 27	9950d76	434.6962	discard	trt-llm-b200-bs1-eagle3-default-k4.yaml	TRT-LLM EAGLE3 default draft k=4: 434.70 — Δ -9.0% vs k=2; verify cost grows faster than acceptance gain past k=2
 28	ff50736	0	crash	trt-llm-b200-bs1-eagle3-redhat.yaml	TRT-LLM EAGLE3 with RedHatAI draft: rejected — config.json missing model_type (vllm-speculator format, not trt-llm compatible)
+29	09ec803	474.0260	keep	vllm-b200-bs1-eagle3-nvidia.yaml	vLLM nightly + EAGLE3 nvidia/gpt-oss-120b-Eagle3 draft k=2: 474.03 tok/s — NEW BEST FOR vLLM, +22.9% over vllm nightly mxfp8; tied within noise with TRT-LLM iter-26
