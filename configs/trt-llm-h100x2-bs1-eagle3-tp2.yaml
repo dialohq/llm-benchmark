@@ -1,0 +1,47 @@
+description: |
+  H100x2 TRT-LLM TP=2 with default MoE backend (TritonFusedMoE on
+  Hopper). The CUTLASS opt-in regressed at TP=1 (105 vs 141) because
+  AutoTuner falls back to non-optimal tactic on Hopper MXFP4. Default
+  is the better path. Test whether TRT-LLM's allreduce on 2x H100
+  scales better than vllm's (vllm TP=2 / TP=1 = 1.30; agent claims
+  TRT-LLM AllReduce ONESHOT/MIN_LATENCY should give ~1.55-1.7x).
+engine: trt-llm
+cmd: mpirun
+args:
+  - --allow-run-as-root
+  - -np
+  - "1"
+  - trtllm-serve
+  - /root/.cache/huggingface/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+  - --backend
+  - pytorch
+  - --tp_size
+  - "2"
+  - --max_batch_size
+  - "8"
+  - --max_seq_len
+  - "4096"
+  - --extra_llm_api_options
+  - /projects/llm-benchmark/configs/trt-llm-eagle3-extra-default-k2.yaml
+cwd: trt-llm
+venv: trt-llm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/trt-llm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  TRTLLM_ENABLE_PDL: "1"
