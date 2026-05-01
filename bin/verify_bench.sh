@@ -8,7 +8,8 @@
 #
 # Env knobs:
 #   NUM_QUERIES (default 50), CONCURRENCY (default 1),
-#   READY_TIMEOUT_S (default 1500), BENCH_TIMEOUT_S (default 600).
+#   READY_TIMEOUT_S (default 1500), BENCH_TIMEOUT_S (default 600),
+#   MODEL (default openai/gpt-oss-120b — must match the model the engine serves).
 
 set -euo pipefail
 
@@ -39,6 +40,7 @@ NUM_QUERIES="${NUM_QUERIES:-50}"
 CONCURRENCY="${CONCURRENCY:-1}"
 READY_TIMEOUT_S="${READY_TIMEOUT_S:-1500}"
 BENCH_TIMEOUT_S="${BENCH_TIMEOUT_S:-600}"
+MODEL="${MODEL:-openai/gpt-oss-120b}"
 
 # Pick a free port for the proxy listener.
 LISTEN_PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null \
@@ -58,7 +60,7 @@ cat > "$BENCH_CFG" <<EOF
   "api_key": "sk-empty",
   "num_queries": $NUM_QUERIES,
   "concurrency": [$CONCURRENCY],
-  "model": "openai/gpt-oss-120b",
+  "model": "$MODEL",
   "extra_body": {},
   "timeout": $BENCH_TIMEOUT_S,
   "seed": 42,

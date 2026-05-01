@@ -25,22 +25,37 @@
       # their own NCCL via wheels).
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
-      # cudaToolkit only carries the compiler and bare minimum nvcc internals.
-      # The engines (vllm 0.19, sglang 0.5.10, trt-llm 1.2) are installed via
-      # uv from the cu13 PyTorch index, and their wheels bundle a full
-      # cu13 toolkit under <venv>/lib/python3.12/site-packages/nvidia/cu13/
-      # (libcudart.so.13, libcublasLt.so.13, full headers). The per-engine
-      # YAML's env block points LIBRARY_PATH / CPATH / NIX_LD_LIBRARY_PATH at
-      # those paths so flashinfer's JIT compiler links against cu13 — matching
-      # what torch loads at runtime. Mixing cu12 (nix) and cu13 (wheel) libs
-      # causes ABI mismatches in the JIT-compiled .so.
-      cudaPkgs = with pkgs.cudaPackages; [
+      # ── CUDA versions required at runtime ─────────────────────────────────
+      # Two CUDA major versions live in each engine venv simultaneously:
+      #
+      #   cu13 — torch 2.10+cu130 wheel: every nvidia/cu13/lib/lib*.so.13,
+      #          libcublasLt.so.13, libcusparse.so.12, etc.; loaded by
+      #          torch at import time. Headers under nvidia/cu13/include
+      #          are what flashinfer's JIT compiler must use so the .so it
+      #          produces is ABI-compatible with the torch runtime.
+      #
+      #   cu12 — vllm 0.19.1 wheel: vllm._C.abi3.so DT_NEEDED is libcudart.so.12.
+      #          The vllm wheel does NOT bundle cu12 libs (the nvidia/cu12/
+      #          dir is missing from the venv) — it relies on the host
+      #          providing libcudart.so.12. We supply it from nixpkgs.
+      #          *Runtime only* — never on LIBRARY_PATH (so the JIT linker
+      #          can't accidentally pick up cu12 .so symlinks for -lcudart).
+      #
+      # Bumping vllm to a cu13-built wheel (when one ships) lets us drop the
+      # cu12 runtime side. Until then both must coexist; mismatch is what
+      # caused the iter-0 ImportError loop on this branch.
+      cudaMajorRuntime = "12";    # vllm._C wheel is cu12-built
+      cudaMajorJit     = "13";    # torch wheel + flashinfer JIT use cu13
+      cu12Pkgs = with pkgs.cudaPackages; [
         cuda_nvcc cuda_cudart cuda_cccl
       ];
-      cudaToolkit = pkgs.symlinkJoin {
-        name = "cuda-12.9-nvcc-only";
-        paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cudaPkgs;
+      cu12Toolkit = pkgs.symlinkJoin {
+        name = "cuda-12.9-nvcc+runtime";
+        paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cu12Pkgs;
       };
+      # Kept under the old name for the rest of the file; the value still
+      # provides nvcc + cu12 runtime libs (libcudart.so.12 etc.).
+      cudaToolkit = cu12Toolkit;
 
       # Note: no python here. UV_PYTHON_PREFERENCE=only-managed makes uv
       # download python-build-standalone, whose interpreter's PT_INTERP
@@ -71,25 +86,50 @@
                  "$FLASHINFER_WORKSPACE_BASE" "$VLLM_CACHE_ROOT"
       '';
 
-      # The vllm / sglang / trt-llm wheels ship a complete cu13 stack under
-      # <venv>/lib/python3.12/site-packages/nvidia/cu13/ (libcudart.so.13,
-      # libcublasLt.so.13, headers, etc.) plus cudnn.so.9 under nvidia/cudnn/
-      # and nccl under nvidia/nccl/. Torch loads these directly at import time,
-      # but flashinfer's runtime JIT (the nvcc shell-out at first engine boot)
-      # also needs them visible to the linker AND the C++ preprocessor. This
-      # hook is a per-engine helper that the engine's shellHook calls with
-      # its own venv path.
-      cu13EnvHook = engineDir: ''
-        if [ -d "$PWD/${engineDir}/.venv" ]; then
-          NV="$PWD/${engineDir}/.venv/lib/python3.12/site-packages/nvidia"
-          # Runtime dlopen via nix-ld: cu13 first so libcudart.so.13 wins
-          # over any cu12 stragglers.
-          export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:''${NIX_LD_LIBRARY_PATH:-}"
-          # JIT linker (ld inside flashinfer) reads LIBRARY_PATH for -lcudart.
-          export LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
-          # JIT compiler (cc / nvcc -isystem) reads CPATH for cublasLt.h etc.
-          export CPATH="$NV/cu13/include:$NV/cudnn/include:''${CPATH:-}"
+      # Per-engine env hook. Sets up paths for the engine's bundled cu13
+      # stack AND the cu12 runtime side, then verifies both versions of
+      # libcudart resolve before letting the shell continue.
+      #
+      # Order rationale:
+      #   * NIX_LD_LIBRARY_PATH (runtime dlopen via nix-ld):
+      #       cu13 venv libs ▸ cudnn ▸ nccl ▸ cu12 toolkit ▸ rest.
+      #       libcudart.so.12 vs libcudart.so.13 are different SONAMEs so
+      #       both resolve regardless of order; cu13 first so unversioned
+      #       libs (e.g. libcusparse.so → 12 on both sides) prefer the venv.
+      #   * LIBRARY_PATH (JIT linker `-lcudart`):
+      #       cu13 venv only. NEVER include cu12 toolkit's lib here, or the
+      #       JIT will produce a .so depending on libcudart.so.12 that then
+      #       conflicts with torch's loaded libcudart.so.13.
+      #   * CPATH (JIT preprocessor `-isystem`):
+      #       cu13 headers only.
+      cudaEnvHook = engineDir: cuMajor: ''
+        # Locate repo root by walking up looking for flake.nix; fall back to
+        # $PWD so callers entering from the repo root still work without it.
+        _root="$PWD"
+        while [ "$_root" != "/" ] && [ ! -e "$_root/flake.nix" ]; do
+          _root="$(dirname "$_root")"
+        done
+        [ -e "$_root/flake.nix" ] || _root="$PWD"
+        if [ -d "$_root/${engineDir}/.venv" ]; then
+          NV="$_root/${engineDir}/.venv/lib/python3.12/site-packages/nvidia"
+          for need in "$NV/cu${cuMajor}/lib/libcudart.so.${cuMajor}" \
+                      "$NV/cu${cuMajor}/include/cublasLt.h" \
+                      "${cudaToolkit}/lib/libcudart.so.${cudaMajorRuntime}"; do
+            if [ ! -e "$need" ]; then
+              echo "✘ ${engineDir} devshell: missing $need" >&2
+              echo "  cu${cuMajor} venv libs come from \`uv sync\` in ${engineDir}/." >&2
+              echo "  cu${cudaMajorRuntime} runtime libs come from nixpkgs cudaPackages." >&2
+              return 1
+            fi
+          done
+          export NIX_LD_LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:$NV/nccl/lib:${cudaToolkit}/lib:''${NIX_LD_LIBRARY_PATH:-}"
+          export LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
+          export CPATH="$NV/cu${cuMajor}/include:$NV/cudnn/include:''${CPATH:-}"
+          echo "✓ ${engineDir}: cu${cuMajor} (jit/torch) + cu${cudaMajorRuntime} (vllm._C runtime) verified" >&2
+        else
+          echo "ℹ ${engineDir}/.venv missing under $_root — run \`uv sync\` to materialize cu${cuMajor} libs" >&2
         fi
+        unset _root
       '';
 
       # Thin attribute-merging helper around mkShellNoCC. Sets the env
@@ -119,7 +159,7 @@
           name = "vllm";
           packages = common ++ [ cudaToolkit ];
           NIX_LD_LIBRARY_PATH = ldPath [ ];
-          shellHook = cacheHook + cu13EnvHook "vllm";
+          shellHook = cacheHook + cudaEnvHook "vllm" cudaMajorJit;
         };
 
         sglang = mkShell {
@@ -135,7 +175,7 @@
           NIX_LD_LIBRARY_PATH = ldPath (with pkgs; [
             numactl openmpi czmq zeromq
           ]);
-          shellHook = cacheHook + cu13EnvHook "sglang";
+          shellHook = cacheHook + cudaEnvHook "sglang" cudaMajorJit;
         };
 
         trt-llm = mkShell {
@@ -143,7 +183,7 @@
           packages = common ++ (with pkgs; [ cudaToolkit openmpi zeromq ]);
           MPICC = "${pkgs.openmpi}/bin/mpicc";
           NIX_LD_LIBRARY_PATH = ldPath (with pkgs; [ openmpi zeromq ]);
-          shellHook = cacheHook + cu13EnvHook "trt-llm" + ''
+          shellHook = cacheHook + cudaEnvHook "trt-llm" cudaMajorJit + ''
             # tensorrt-llm 1.2 cu13 stack references CUDA Driver API
             # symbols (cuKernelGetName, added in CUDA 12.4) that aren't
             # in libcuda.so on r5xx (≤r575). Refuse shell entry rather
