@@ -7,3 +7,4 @@ iteration	commit	tok_s	status	yaml	description
 5	0b35e40	363.1623	discard	vllm-b200-bs1-fusions.yaml	compilation pass fusions on top of mxfp8-moe: Δ -2.17% vs iter-4 (within noise but slightly negative); simpler wins
 6	5e75b94	366.5820	discard	vllm-b200-bs1-mxfp8-kv-fp8.yaml	kv-cache fp8 + mxfp8-moe combo: Δ -1.25% vs iter-4 — KV bandwidth still negligible vs MoE matmul at BS=1
 7	8beace8	371.1297	discard	vllm-b200-bs1-fi-sampler.yaml	VLLM_USE_FLASHINFER_SAMPLER=1: Δ -0.022% vs iter-4 (statistically identical); sampler off the critical path
+8	100b0d5	359.2491	discard	vllm-b200-bs1-graph-1-only.yaml	cudagraph_capture_sizes=[1]: Δ -3.22% vs iter-4 — limiting captures didn't help, slight regression
