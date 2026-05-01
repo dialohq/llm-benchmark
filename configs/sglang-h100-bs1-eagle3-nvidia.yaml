@@ -1,0 +1,56 @@
+description: |
+  H100 single-GPU sglang TP=1 + EAGLE3 nvidia draft k=2 + fa3.
+  Mirror of iter-64 (TP=2) on a single H100 to compare TP scaling
+  across all three engines:
+    vllm Marlin TP=1=246  TP=2=320  scaling=1.30x
+    sglang     TP=1=?    TP=2=243  scaling=?
+    trt-llm    TP=1=142  TP=2=203  scaling=1.44x
+engine: sglang
+cmd: sglang
+args:
+  - serve
+  - --model-path
+  - openai/gpt-oss-120b
+  - --tp
+  - "1"
+  - --attention-backend
+  - fa3
+  - --cuda-graph-max-bs
+  - "4"
+  - --max-running-requests
+  - "1"
+  - --mem-fraction-static
+  - "0.93"
+  - --speculative-algorithm
+  - EAGLE3
+  - --speculative-draft-model-path
+  - nvidia/gpt-oss-120b-Eagle3
+  - --speculative-num-steps
+  - "2"
+  - --speculative-eagle-topk
+  - "1"
+  - --speculative-num-draft-tokens
+  - "3"
+cwd: sglang
+venv: sglang/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/sglang/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cuda_cupti/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cufft/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cufile/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/curand/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cusolver/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cusparse/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cusparselt/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nccl/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nvjitlink/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nvshmem/lib:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nvtx/lib:$LIBRARY_PATH
+  CPATH: $REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cublas/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cuda_cupti/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cudnn/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cufft/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cufile/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/curand/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cusolver/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cusparse/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/cusparselt/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nccl/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nvjitlink/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nvshmem/include:$REPO_ROOT/sglang/.venv/lib/python3.12/site-packages/nvidia/nvtx/include:$CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"
+  SGLANG_ENABLE_SPEC_V2: "1"
