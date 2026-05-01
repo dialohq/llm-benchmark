@@ -40,3 +40,4 @@ proxy/target/
 
 # Local Claude Code state
 .claude/
+.cache/

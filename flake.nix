@@ -64,6 +64,33 @@
       # named output via getOutput.
       cu12RuntimeLibs = lib.getOutput "lib" pkgs.cudaPackages.cuda_cudart;
 
+      # cu13's cudaTypedefs.h dropped the unversioned `PFN_X` macro aliases
+      # that cu12 carried (PFN_X is now only present as `PFN_X_v12000`).
+      # flashinfer 0.6.6's bundled cutlass references the unversioned forms
+      # (e.g. PFN_cuTensorMapEncodeTiled) and won't compile against cu13
+      # headers alone. Build a shim include dir whose cudaTypedefs.h
+      # `#include_next`s cu13's real header then adds back the macro alias
+      # block extracted verbatim from cu12 cudart. Put this dir FIRST on
+      # CPATH; everything else falls through to cu13.
+      cu13TypedefShim = pkgs.runCommand "cu13-typedef-shim" { } ''
+        mkdir -p $out/include
+        aliases=$(mktemp)
+        grep -E '^#define PFN_cu' \
+          ${cu12RuntimeLibs}/include/cudaTypedefs.h > "$aliases"
+        {
+          echo '#pragma once'
+          echo '#include_next <cudaTypedefs.h>'
+          # Guard each alias so a future cu13 that re-adds them won't redefine.
+          while read -r line; do
+            name=$(echo "$line" | awk '{print $2}')
+            echo "#ifndef $name"
+            echo "$line"
+            echo "#endif"
+          done < "$aliases"
+        } > $out/include/cudaTypedefs.h
+        rm -f "$aliases"
+      '';
+
       # Note: no python here. UV_PYTHON_PREFERENCE=only-managed makes uv
       # download python-build-standalone, whose interpreter's PT_INTERP
       # is /lib64/ld-linux-x86-64.so.2 → on this nix-ld container that's
@@ -83,8 +110,20 @@
       ldPath = sysDeps:
         lib.makeLibraryPath (runtimeLibs ++ sysDeps) + ":" + driverLib;
 
+      # Default cache lives inside the repo (.cache/) so it's discoverable,
+      # gitignorable, and trivially relocatable with the checkout. Override
+      # by exporting LLM_CACHE_ROOT to an absolute path before entering the
+      # devshell.
       cacheHook = ''
-        : "''${LLM_CACHE_ROOT:=$HOME/.cache/llm-benchmark}"
+        if [ -z "''${LLM_CACHE_ROOT:-}" ]; then
+          _croot="$PWD"
+          while [ "$_croot" != "/" ] && [ ! -e "$_croot/flake.nix" ]; do
+            _croot="$(dirname "$_croot")"
+          done
+          [ -e "$_croot/flake.nix" ] || _croot="$PWD"
+          export LLM_CACHE_ROOT="$_croot/.cache"
+          unset _croot
+        fi
         export TRITON_CACHE_DIR="$LLM_CACHE_ROOT/triton"
         export TORCHINDUCTOR_CACHE_DIR="$LLM_CACHE_ROOT/inductor"
         export FLASHINFER_WORKSPACE_BASE="$LLM_CACHE_ROOT/flashinfer"
@@ -129,9 +168,27 @@
               return 1
             fi
           done
+          # The cu13 venv ships only versioned SONAMEs (libcudart.so.13). The
+          # JIT linker's `-lcudart` looks for unversioned `libcudart.so` first,
+          # so without these compat symlinks it falls through past LIBRARY_PATH
+          # and fails ENOENT. Create the symlinks idempotently in the venv.
+          for soname in cudart cudart_static cublas cublasLt cusparse cusolver \
+                        cufft curand cufile cupti nvJitLink nvrtc nvrtc-builtins; do
+            if [ -e "$NV/cu${cuMajor}/lib/lib''${soname}.so.${cuMajor}" ] && \
+               [ ! -e "$NV/cu${cuMajor}/lib/lib''${soname}.so" ]; then
+              ln -s "lib''${soname}.so.${cuMajor}" \
+                    "$NV/cu${cuMajor}/lib/lib''${soname}.so" 2>/dev/null || true
+            fi
+          done
           export NIX_LD_LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12RuntimeLibs}/lib:''${NIX_LD_LIBRARY_PATH:-}"
           export LIBRARY_PATH="$NV/cu${cuMajor}/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
-          export CPATH="$NV/cu${cuMajor}/include:$NV/cudnn/include:''${CPATH:-}"
+          # CPATH order: typedef shim FIRST (its cudaTypedefs.h adds the
+          # unversioned PFN_* macro aliases cu13 dropped — flashinfer 0.6.6's
+          # bundled cutlass needs them; #include_next falls through to cu13's
+          # real cudaTypedefs.h for everything else), then cu13 venv includes,
+          # then cudnn. Pulling all of cu12 cudart's include onto CPATH
+          # instead would shadow cu13's cooperative_groups, cublasLt, etc.
+          export CPATH="${cu13TypedefShim}/include:$NV/cu${cuMajor}/include:$NV/cudnn/include:''${CPATH:-}"
           echo "✓ ${engineDir}: cu${cuMajor} (jit/torch) + cu${cudaMajorRuntime} (vllm._C runtime) verified" >&2
         else
           echo "ℹ ${engineDir}/.venv missing under $_root — run \`uv sync\` to materialize cu${cuMajor} libs" >&2
