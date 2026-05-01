@@ -38,3 +38,4 @@ iteration	commit	tok_s	status	yaml	description
 36	95b1cc1	0	crash	vllm-b200-bs1-suffix.yaml	vLLM SuffixDecoding via arctic-inference 0.1.2: incompat with vllm 0.20+ (FlexibleArgumentParser moved, EngineArgs._is_v1_supported_oracle removed). Would need arctic update or vllm 0.11 downgrade.
 37	8cb862b	265.9979	discard	vllm-b200-bs1-p-eagle.yaml	vLLM P-EAGLE (amazon/gpt-oss-120b-p-eagle k=5): 265.99 — Δ -43.9% vs iter-29; parallel-drafting head doesn't beat sequential nvidia draft for our workload
 38	78ca2ca	477.8418	keep	vllm-b200-bs1-recipe.yaml	vLLM Recipe — EAGLE3 nvidia k=2 + custom_ops:[+rms_norm] + fuse_allreduce_rms + eliminate_noops: 477.84 — NEW BEST FOR vLLM, ties TRT-LLM iter-26
+39	c5f13ba	475.3248	discard	vllm-b200-bs1-eagle3-guided.yaml	vllm EAGLE3 + per-query guided_json={type:object}: 475.32 — Δ -0.53% vs iter-38 best; loose schema doesn't extract enough determinism. Field names + enum values stay model-decided

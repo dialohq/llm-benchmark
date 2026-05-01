@@ -61,7 +61,7 @@ cat > "$BENCH_CFG" <<EOF
   "num_queries": $NUM_QUERIES,
   "concurrency": [$CONCURRENCY],
   "model": "$MODEL",
-  "extra_body": {},
+  "extra_body": ${EXTRA_BODY:-{\}},
   "timeout": $BENCH_TIMEOUT_S,
   "seed": 42,
   "output_dir": "$RUN_ROOT",

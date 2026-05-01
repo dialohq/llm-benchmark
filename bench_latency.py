@@ -67,6 +67,8 @@ def load_queries(
     rng = random.Random(seed)
     sampled = rng.sample(rows, min(n, len(rows)))
 
+    auto_guided_json = bool(extra_body.pop("_auto_guided_json", False))
+
     out: list[dict[str, Any]] = []
     for raw in sampled:
         payload = json.loads(raw)
@@ -76,6 +78,23 @@ def load_queries(
         # unknown fields; trt-llm uses strict pydantic and 400s the request.
         # Strip it here so all engines see the same OpenAI-spec body.
         payload.pop("provider", None)
+        # Per-query JSON guided-decoding heuristic: 84% of queries.csv
+        # system prompts say "Return ONLY valid JSON" / similar. Setting
+        # guided_json={"type":"object"} on those lets vllm's grammar
+        # backend (xgrammar by default in 0.20) skip LM forward passes
+        # on tokens that are uniquely determined by the JSON grammar
+        # (~47% of output is pure JSON syntax for this workload).
+        # Triggered only when extra_body has _auto_guided_json: true so
+        # baseline runs stay bit-identical.
+        if auto_guided_json:
+            sys_msg = next(
+                (m.get("content", "") for m in payload.get("messages", [])
+                 if m.get("role") == "system"),
+                "",
+            )
+            if "JSON" in sys_msg or "json" in sys_msg.split("\n", 1)[0].lower():
+                payload.setdefault("extra_body", {})
+                payload["extra_body"]["guided_json"] = {"type": "object"}
         # Merge extra_body on top — caller-provided overrides win.
         payload.update(extra_body)
         out.append(payload)

@@ -1,0 +1,51 @@
+description: |
+  iter-39: iter-29 winner (vllm EAGLE3 nvidia/gpt-oss-120b-Eagle3 k=2) +
+  per-query guided_json={"type":"object"} for the 84% of queries.csv
+  prompts that ask for JSON output. xgrammar (vllm default backend in
+  0.20) supports fast-forward on grammar-determined tokens, which for
+  our workload (47% pure JSON syntax char share) should bypass a large
+  fraction of LM forward passes.
+
+  Triggered via EXTRA_BODY='{"_auto_guided_json": true}' in the verify
+  script, which bench_latency.py picks up and conditionally adds
+  guided_json per-query based on a "JSON" system-prompt heuristic.
+
+  vllm engine YAML is the same as iter-29; the new behavior is purely
+  in bench_latency.py.
+engine: vllm
+cmd: vllm
+args:
+  - serve
+  - openai/gpt-oss-120b
+  - --tensor-parallel-size
+  - "1"
+  - --gpu-memory-utilization
+  - "0.90"
+  - --max-model-len
+  - "4096"
+  - --max-num-seqs
+  - "1"
+  - --speculative-config
+  - '{"method":"eagle3","model":"nvidia/gpt-oss-120b-Eagle3","num_speculative_tokens":2}'
+cwd: vllm
+venv: vllm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/vllm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"
+  VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8: "1"
