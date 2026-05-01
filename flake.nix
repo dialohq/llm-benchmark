@@ -25,9 +25,20 @@
       # their own NCCL via wheels).
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
+      # nixpkgs cuda packages are multi-output: the default `out` is often a
+      # near-empty stub and the real content lives in `lib` (.so), `include`
+      # (headers), `static` (.a), and `stubs` (link-time stubs). flashinfer
+      # JIT-compiles fp4_quantization.cu at first engine boot and needs
+      # cublasLt.h + libcublasLt.so + cudnn etc., so we pull every output
+      # of every CUDA lib we need into one merged tree.
+      cudaPkgs = with pkgs.cudaPackages; [
+        cuda_nvcc cuda_cudart cuda_cccl cuda_nvrtc
+        libnvjitlink libcublas libcusparse libcusolver
+        libcurand libcufft cudnn
+      ];
       cudaToolkit = pkgs.symlinkJoin {
         name = "cuda-12.9-merged";
-        paths = with pkgs.cudaPackages; [ cuda_nvcc cuda_cudart cuda_cccl ];
+        paths = lib.concatMap (p: map (o: p.${o}) p.outputs) cudaPkgs;
       };
 
       # Note: no python here. UV_PYTHON_PREFERENCE=only-managed makes uv
