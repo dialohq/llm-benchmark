@@ -11,3 +11,4 @@ iteration	commit	tok_s	status	yaml	description
 9	8b6874e	363.0543	discard	vllm-b200-bs1-lean-scheduler.yaml	no-chunked-prefill + no-prefix-cache + no-log-stats: Δ -2.20% vs iter-4 — scheduler overhead wasn't material; chunked-prefill disabled may force slower codepath
 10	75cd09d	250.0716	discard	vllm-b200-bs1-cutlass-moe.yaml	CUTLASS variant of MXFP4_MXFP8 MoE: Δ -32.6% vs iter-4 — TRTLLM-gen kernel is decisively faster at BS=1
 11	c100b36	363.7381	discard	vllm-b200-bs1-mml-2048.yaml	max-model-len 2048: Δ -2.01% vs iter-4 + 5/50 prompts overflowed (HTTP 400) — slower AND correctness regression
+12	b588867	0	crash	vllm-b200-bs1-oink.yaml	VLLM_USE_OINK_OPS=1: vllm 0.19.1 + Oink incompat — TypeError unhashable list in logger.warning_once during engine init
