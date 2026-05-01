@@ -4,3 +4,4 @@ iteration	commit	tok_s	status	yaml	description
 2	3fdcd86	133.6132	discard	vllm-b200-bs1-ngram-spec.yaml	ngram spec-decoding (k=5,window=2-4) REGRESSED — likely defeats BS=1 CUDA graphs / verify pass overhead exceeds spec hit gain
 3	d397158	221.5728	discard	vllm-b200-bs1-kv-fp8.yaml	kv-cache fp8: within noise of cuda-graphs (Δ -0.94%); simpler wins → discard
 4	527ea3c	371.2106	keep	vllm-b200-bs1-mxfp8-moe.yaml	VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1: MoE intermediate activations FP8 → 3.81x baseline / 1.66x iter-1
+5	0b35e40	363.1623	discard	vllm-b200-bs1-fusions.yaml	compilation pass fusions on top of mxfp8-moe: Δ -2.17% vs iter-4 (within noise but slightly negative); simpler wins
