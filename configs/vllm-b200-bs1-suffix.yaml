@@ -1,0 +1,48 @@
+description: |
+  vllm nightly + iter-4 mxfp8-moe base + Snowflake SuffixDecoding via
+  arctic-inference plugin. Adaptive suffix-tree drafter with ~20us CPU
+  drafting; for structured-JSON outputs (intent classifier) acceptance
+  is reportedly very high (Snowflake claims 1.6-1.8x e2e on gpt-oss-120b).
+  Note: arctic-inference 0.1.2 pins vllm==0.11.0; we set
+  ARCTIC_INFERENCE_SKIP_VERSION_CHECK=1 to use it on our nightly.
+engine: vllm
+cmd: vllm
+args:
+  - serve
+  - openai/gpt-oss-120b
+  - --tensor-parallel-size
+  - "1"
+  - --gpu-memory-utilization
+  - "0.90"
+  - --max-model-len
+  - "4096"
+  - --max-num-seqs
+  - "1"
+  - --speculative-config
+  - '{"method":"suffix","suffix_cache_max_depth":24,"suffix_max_spec_factor":1.0}'
+cwd: vllm
+venv: vllm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/vllm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"
+  VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8: "1"
+  ARCTIC_INFERENCE_ENABLED: "1"
+  ARCTIC_INFERENCE_SKIP_VERSION_CHECK: "1"
+  ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK: "1"
+  ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK: "1"

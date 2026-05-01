@@ -35,3 +35,4 @@ iteration	commit	tok_s	status	yaml	description
 34	e4019f9	221.0107	discard	trt-llm-b200-bs1-eagle3-v2-ll-k3.yaml	TRT-LLM Eagle3-v2 + LL flags + k=3: 221.01 — even worse than v2 k=2; v2 draft regresses across all k tested for our workload
 34	e4019f9	221.0107	discard	trt-llm-b200-bs1-eagle3-v2-ll-k3.yaml	TRT-LLM Eagle3-v2 + LL flags + k=3: 221.01 — even worse than v2 k=2; v2 draft regresses across all k for our workload
 35	bf22493	466.5350	discard	trt-llm-b200-bs1-eagle3-default-k2-ll.yaml	TRT-LLM default Eagle3 k=2 + NVIDIA full LL flags (eagle3_one_model, enable_min_latency, no autotuner, stream_interval=20, postprocess_workers=2): 466.53 — Δ -2.33% vs iter-26 — LL flags net-negative for this workload
+36	95b1cc1	0	crash	vllm-b200-bs1-suffix.yaml	vLLM SuffixDecoding via arctic-inference 0.1.2: incompat with vllm 0.20+ (FlexibleArgumentParser moved, EngineArgs._is_v1_supported_oracle removed). Would need arctic update or vllm 0.11 downgrade.
