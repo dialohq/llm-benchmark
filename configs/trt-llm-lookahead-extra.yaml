@@ -1,0 +1,14 @@
+# TRT-LLM Lookahead decoding: Jacobi-style fixed-point iteration.
+# No draft model needed — generates K future tokens by iterating until
+# a fixed point. Reportedly works well for highly repetitive outputs.
+# (window_size, ngram_size, verification_set_size) = (5, 3, 5) is the
+# canonical lmsys recipe.
+speculative_config:
+  decoding_type: Lookahead
+  max_window_size: 5
+  max_ngram_size: 3
+  max_verification_set_size: 5
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 8]
