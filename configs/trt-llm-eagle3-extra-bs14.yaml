@@ -1,0 +1,12 @@
+# EAGLE3 extras with explicit cuda_graph batch_sizes capture for both
+# decode shape (1) and verify shape (1 + max_draft_len = 4 with k=3).
+# iter-19 used only max_batch_size=4 which apparently didn't capture both
+# shapes properly.
+speculative_config:
+  decoding_type: Eagle3
+  max_draft_len: 3
+  speculative_model_dir: nvidia/gpt-oss-120b-Eagle3-short-context
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 4]
