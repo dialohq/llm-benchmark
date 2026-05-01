@@ -118,19 +118,15 @@ done
 "$VENV/bin/python" "$REPO_ROOT/bench_latency.py" "$BENCH_CFG" "$(basename "$YAML")" \
   > "$BENCH_LOG" 2>&1
 
-# bench_latency.py creates a UUID subdir under output_dir; find result.json.
-# Retry briefly: even though the bench command was foreground, observed in
-# practice that find can return empty immediately after python exits while
-# the OS hasn't yet flushed the new dirent into the parent inode listing
-# (notably on overlayfs/bind-mounted setups). 5x500ms is plenty.
-RESULT_JSON=""
-for _ in 1 2 3 4 5; do
-  RESULT_JSON=$(find "$RUN_ROOT" -mindepth 2 -maxdepth 2 -name result.json 2>/dev/null | head -1 || true)
-  [ -n "$RESULT_JSON" ] && [ -f "$RESULT_JSON" ] && break
-  sleep 0.5
-done
-if [ -z "$RESULT_JSON" ] || [ ! -f "$RESULT_JSON" ]; then
-  echo "[verify] no result.json in $RUN_ROOT — tail of bench.log:" >&2
+# bench_latency.py prints `run dir: <abs-path>` to stderr (captured into
+# bench.log) right after creating the UUID subdir, *before* any requests run.
+# Read it from the log instead of `find`-ing the directory tree — `find`
+# was observed returning empty even when result.json was already on disk
+# (overlayfs dirent visibility lag on this container).
+RUN_DIR=$(awk '/^run dir:/ {print $3; exit}' "$BENCH_LOG" 2>/dev/null || true)
+RESULT_JSON="$RUN_DIR/result.json"
+if [ -z "$RUN_DIR" ] || [ ! -f "$RESULT_JSON" ]; then
+  echo "[verify] no result.json (parsed run dir='$RUN_DIR') — tail of bench.log:" >&2
   tail -80 "$BENCH_LOG" >&2 || true
   exit 4
 fi
