@@ -1,0 +1,15 @@
+# iter-35: iter-26 winner (default Eagle3 k=2) + NVIDIA's full low-latency
+# flag set. Isolates the flags themselves from the v2 draft regression.
+speculative_config:
+  decoding_type: Eagle3
+  max_draft_len: 2
+  speculative_model_dir: nvidia/gpt-oss-120b-Eagle3
+  eagle3_one_model: true
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 3]
+enable_min_latency: true
+enable_autotuner: false
+stream_interval: 20
+num_postprocess_workers: 2

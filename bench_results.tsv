@@ -32,3 +32,5 @@ iteration	commit	tok_s	status	yaml	description
 31	9891559	438.7416	discard	trt-llm-b200-bs1-eagle3-default-k1.yaml	TRT-LLM EAGLE3 default k=1: 438.74 — Δ -8.2% vs k=2; not enough drafts to amortize verify, k=2 confirmed peak (k=1:438, 2:478, 3:462, 4:435)
 32	b58d86a	287.7345	discard	sglang-b200-bs1-eagle3-nvidia.yaml	sglang + nvidia/gpt-oss-120b-Eagle3 draft k=2: 287.73 — Δ -16.2% vs sglang baseline; sglang's EAGLE3 path regresses regardless of draft (cf trt-llm/vllm where same draft wins)
 33	7178211	240.0031	discard	trt-llm-b200-bs1-eagle3-v2-lowlatency.yaml	TRT-LLM Eagle3-v2 + NVIDIA low-latency flags + k=2: 240.00 — Δ -49.8% vs iter-26; v2 draft not a fit for our workload despite vendor positioning
+34	e4019f9	221.0107	discard	trt-llm-b200-bs1-eagle3-v2-ll-k3.yaml	TRT-LLM Eagle3-v2 + LL flags + k=3: 221.01 — even worse than v2 k=2; v2 draft regresses across all k tested for our workload
+34	e4019f9	221.0107	discard	trt-llm-b200-bs1-eagle3-v2-ll-k3.yaml	TRT-LLM Eagle3-v2 + LL flags + k=3: 221.01 — even worse than v2 k=2; v2 draft regresses across all k for our workload
