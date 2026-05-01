@@ -71,6 +71,11 @@ def load_queries(
     for raw in sampled:
         payload = json.loads(raw)
         payload["model"] = model_override
+        # queries.csv carries a non-OpenAI `provider` field (e.g. "groq")
+        # that the original generator embedded. vLLM/sglang silently accept
+        # unknown fields; trt-llm uses strict pydantic and 400s the request.
+        # Strip it here so all engines see the same OpenAI-spec body.
+        payload.pop("provider", None)
         # Merge extra_body on top — caller-provided overrides win.
         payload.update(extra_body)
         out.append(payload)

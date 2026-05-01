@@ -17,3 +17,4 @@ iteration	commit	tok_s	status	yaml	description
 15	ce889cb	373.3223	discard	vllm-b200-bs1-latency-moe.yaml	VLLM_FLASHINFER_MOE_BACKEND=latency on top of MXFP4_MXFP8: backend selection unchanged (MXFP4_MXFP8 path overrides), Δ +0.57% noise
 16	4db4995	248.5279	discard	vllm-b200-bs1-eagle3.yaml	vLLM EAGLE3 (RedHatAI draft, k=3) on top of iter-4: Δ -33.0% — same pattern as ngram, spec invalidates BS=1 CUDA graphs in vLLM
 20	e40338e	385.7996	keep	vllm-b200-bs1-mxfp8-moe.yaml	vLLM nightly 0.20.1rc1.dev129+ga3ec4a35f + flashinfer 0.6.8.post1 + torch 2.11.0+cu130 — re-bench of iter-4 config: NEW BEST, +3.93% over iter-4
+18	4018487	388.5456	keep	trt-llm-b200-bs1-baseline.yaml	TRT-LLM 1.3.0rc13 TP=1 pytorch backend (mpirun -np 1): 388.55 — slightly above vLLM nightly best (385.80, +0.71%); cross-engine new best, 3.99x baseline
