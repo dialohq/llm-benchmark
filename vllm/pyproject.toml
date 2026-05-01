@@ -1,10 +1,13 @@
 [project]
 name = "vllm-env"
 version = "0.1.0"
-description = "vLLM serving env, bleeding-edge 2026-04-21"
+description = "vLLM serving env, nightly 2026-05-01"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-  "vllm==0.19.1",
+  # vllm nightly from https://wheels.vllm.ai/nightly (routed via tool.uv.sources).
+  # Latest dev build at upgrade time was 0.20.1rc1.dev129+ga3ec4a35f; allow any
+  # newer dev build to flow through.
+  "vllm>=0.20.1rc1.dev0",
   "huggingface-hub",
   "hf-transfer",
 ]
@@ -12,29 +15,32 @@ dependencies = [
 [project.optional-dependencies]
 # Hopper SM_90 — CUDA 12.9 stack.
 h100 = [
-  "torch==2.10.0",
-  "torchvision==0.25.0",
-  "torchaudio==2.10.0",
-  "flashinfer-python==0.6.6",
-  "flashinfer-cubin==0.6.6",
+  # torch / torchvision / torchaudio / flashinfer-python / flashinfer-cubin
+  # are all pinned transitively by vllm — let them flow through. We still
+  # route torch through the cu130 index via tool.uv.sources below.
+  "torch",
+  "torchvision",
+  "torchaudio",
   "xgrammar>=0.1.32,<1.0.0",
 ]
 # Hopper SM_90 — identical wheel set to H100 (same arch, more HBM).
 h200 = [
-  "torch==2.10.0",
-  "torchvision==0.25.0",
-  "torchaudio==2.10.0",
-  "flashinfer-python==0.6.6",
-  "flashinfer-cubin==0.6.6",
+  # torch / torchvision / torchaudio / flashinfer-python / flashinfer-cubin
+  # are all pinned transitively by vllm — let them flow through. We still
+  # route torch through the cu130 index via tool.uv.sources below.
+  "torch",
+  "torchvision",
+  "torchaudio",
   "xgrammar>=0.1.32,<1.0.0",
 ]
 # Blackwell SM_100 — CUDA 13.0 stack. Torch comes from cu130 index.
 b200 = [
-  "torch==2.10.0",
-  "torchvision==0.25.0",
-  "torchaudio==2.10.0",
-  "flashinfer-python==0.6.6",
-  "flashinfer-cubin==0.6.6",
+  # torch / torchvision / torchaudio / flashinfer-python / flashinfer-cubin
+  # are all pinned transitively by vllm — let them flow through. We still
+  # route torch through the cu130 index via tool.uv.sources below.
+  "torch",
+  "torchvision",
+  "torchaudio",
   "xgrammar>=0.1.32,<1.0.0",
 ]
 
@@ -58,7 +64,13 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+[[tool.uv.index]]
+name = "vllm-nightly"
+url = "https://wheels.vllm.ai/nightly"
+explicit = true
+
 [tool.uv.sources]
+vllm = { index = "vllm-nightly" }
 torch = [
   { index = "pytorch-cu129", extra = "h100" },
   { index = "pytorch-cu129", extra = "h200" },
