@@ -232,11 +232,11 @@
         };
 
         # ─────────── trt-llm ─────────────────────────────────────────────────
-        # cu13 venv libs + cu12 cudart (torchao's _C.abi3.so still
-        # DT_NEEDs libcudart.so.12 even on the cu13 trt-llm stack).
-        # No cu13TypedefShim (no flashinfer JIT) and no cu12Extras
-        # (nothing here DT_NEEDs cu12 nvrtc/cublas). openmpi + zeromq
-        # for the MPI executor pool.
+        # cu13 venv libs only. torchao's _C.abi3.so DT_NEEDs libcudart.so.12
+        # but trtllm-serve never dlopens it during a serve loop (verified
+        # by checking /proc/self/maps after `import tensorrt_llm` and after
+        # a chat completion). No cu13TypedefShim (no flashinfer JIT).
+        # openmpi + zeromq for the MPI executor pool.
         #
         # tensorrt-llm 1.3 cu13 stack references CUDA Driver API symbols
         # (cuKernelGetName, added in CUDA 12.4) that aren't in libcuda.so
@@ -267,19 +267,16 @@
             if [ -d "$_root/trt-llm/.venv" ]; then
               NV="$_root/trt-llm/.venv/lib/python3.12/site-packages/nvidia"
               for need in "$NV/cu13/lib/libcudart.so.13" \
-                          "$NV/cu13/include/cublasLt.h" \
-                          "${cu12Cudart}/lib/libcudart.so.12"; do
+                          "$NV/cu13/include/cublasLt.h"; do
                 if [ ! -e "$need" ]; then
-                  echo "✘ trt-llm devshell: missing $need" >&2
-                  echo "  cu13 venv libs come from \`uv sync\` in trt-llm/." >&2
-                  echo "  cu12 cudart comes from nixpkgs cudaPackages_12_9." >&2
+                  echo "✘ trt-llm devshell: missing $need (run \`uv sync\` in trt-llm/)" >&2
                   return 1
                 fi
               done
-              export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12Cudart}/lib:${lib.makeLibraryPath (with pkgs; [ openmpi zeromq ])}:${runtimeLibs}:${driverLib}"
+              export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:${lib.makeLibraryPath (with pkgs; [ openmpi zeromq ])}:${runtimeLibs}:${driverLib}"
               export LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
               export CPATH="$NV/cu13/include:$NV/cudnn/include:${cudaToolkit}/include:''${CPATH:-}"
-              echo "✓ trt-llm: cu13 venv + cu12 cudart verified" >&2
+              echo "✓ trt-llm: cu13 venv libs verified" >&2
             else
               echo "ℹ trt-llm/.venv missing under $_root — run \`uv sync\` to materialize cu13 libs" >&2
             fi
