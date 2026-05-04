@@ -53,15 +53,17 @@
       # reads include/cudaTypedefs.h from it).
       cu12Cudart = cuda12.cuda_cudart;
 
-      # cu12 libs sglang's bundled sgl_kernel + flashinfer kernels dlopen
-      # at runtime (libnvrtc.so.12 etc). Kept *outside* CUDA_HOME so the
-      # JIT linker doesn't pick cu12 over cu13 for `-lcudart`/`-lcublas`.
+      # cu12 libs sglang's bundled sgl_kernel dlopens at runtime that the
+      # torch wheel does NOT bundle: libnvrtc.so.12, libcublas.so.12,
+      # libcublasLt.so.12. Other cu12 libs sgl_kernel/torch reference
+      # (cufft/cusparse/cusolver/curand/cupti) are already shipped inside
+      # the venv's nvidia/cu13/lib/ — pulling those from nixpkgs would be
+      # a no-op since the venv path is first on NIX_LD_LIBRARY_PATH.
+      # Kept outside CUDA_HOME so the JIT linker can't pick cu12 over cu13
+      # for `-lcudart`/`-lcublas`.
       cu12Extras = pkgs.symlinkJoin {
         name = "cu12-extras";
-        paths = with cuda12; [
-          cuda_nvrtc.lib libcublas.lib libcusparse.lib libcusolver.lib
-          libcurand.lib libcufft.lib cuda_cupti.lib
-        ];
+        paths = [ cuda12.cuda_nvrtc.lib cuda12.libcublas.lib ];
       };
 
       # cu13 dropped the unversioned `PFN_X` macro aliases (now only
@@ -126,26 +128,13 @@
         done
         [ -e "$_root/flake.nix" ] || _root="$PWD"
       '';
-
-      # cu13 venv ships only versioned SONAMEs (libcudart.so.13). The JIT
-      # linker's `-lcudart` looks for unversioned `libcudart.so` first, so
-      # without these compat symlinks it falls through past LIBRARY_PATH
-      # and fails ENOENT. Idempotent.
-      cu13SymlinkLoop = ''
-        for s in cudart cudart_static cublas cublasLt cusparse cusolver \
-                 cufft curand cufile cupti nvJitLink nvrtc nvrtc-builtins; do
-          if [ -e "$NV/cu13/lib/lib''${s}.so.13" ] && \
-             [ ! -e "$NV/cu13/lib/lib''${s}.so" ]; then
-            ln -s "lib''${s}.so.13" "$NV/cu13/lib/lib''${s}.so" \
-              2>/dev/null || true
-          fi
-        done
-      '';
     in {
       devShells.${system} = {
         # ─────────── vllm ────────────────────────────────────────────────────
-        # cu13 venv libs (torch + flashinfer JIT) + cu12 cudart (vllm._C
-        # runtime). Flashinfer JIT needs cu13TypedefShim for cutlass.
+        # cu13 venv libs only (torch + flashinfer JIT). Nothing in the
+        # vllm venv DT_NEEDs libcudart.so.12, so no nixpkgs cu12 supply.
+        # flashinfer JIT needs cu13TypedefShim for the cutlass headers
+        # that still reference unversioned PFN_X macro aliases.
         vllm = pkgs.mkShellNoCC {
           name = "vllm";
           packages = common ++ [ cudaToolkit ];
@@ -168,32 +157,24 @@
             if [ -d "$_root/vllm/.venv" ]; then
               NV="$_root/vllm/.venv/lib/python3.12/site-packages/nvidia"
               for need in "$NV/cu13/lib/libcudart.so.13" \
-                          "$NV/cu13/include/cublasLt.h" \
-                          "${cu12Cudart}/lib/libcudart.so.12"; do
+                          "$NV/cu13/include/cublasLt.h"; do
                 if [ ! -e "$need" ]; then
-                  echo "✘ vllm devshell: missing $need" >&2
-                  echo "  cu13 venv libs come from \`uv sync\` in vllm/." >&2
-                  echo "  cu12 runtime libs come from nixpkgs cudaPackages." >&2
+                  echo "✘ vllm devshell: missing $need (run \`uv sync\` in vllm/)" >&2
                   return 1
                 fi
               done
-              ${cu13SymlinkLoop}
-              # NIX_LD_LIBRARY_PATH (runtime dlopen via nix-ld):
-              #   cu13 venv ▸ cudnn ▸ nccl ▸ cu12 cudart ▸ generic runtime ▸ driver.
-              #   libcudart.so.{12,13} are different SONAMEs so both resolve.
-              export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12Cudart}/lib:${runtimeLibs}:${driverLib}"
-              # LIBRARY_PATH (JIT linker `-lcudart`): cu13 venv only.
-              # NEVER include cu12 here, or the JIT will produce a .so
-              # depending on libcudart.so.12 that conflicts with torch's
-              # loaded libcudart.so.13.
+              # NIX_LD_LIBRARY_PATH: cu13 venv ▸ cudnn ▸ nccl ▸ runtime ▸ driver.
+              export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:${runtimeLibs}:${driverLib}"
+              # LIBRARY_PATH (JIT linker `-l*`): cu13 venv only. Driver lib
+              # comes from the Nix attr above; we prepend cu13 here.
               export LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
-              # CPATH: typedef shim FIRST (its cudaTypedefs.h adds the
-              # unversioned PFN_* macro aliases cu13 dropped — flashinfer
-              # 0.6.6's cutlass needs them; #include_next falls through
+              # CPATH: typedef shim FIRST (its cudaTypedefs.h adds back the
+              # unversioned PFN_* aliases cu13 dropped — flashinfer's mamba
+              # tensormap header needs them; #include_next falls through
               # to cu13's real header), then cu13 venv, cudnn, then
               # CUDA_HOME's include (`<nv/target>` etc).
               export CPATH="${cu13TypedefShim}/include:$NV/cu13/include:$NV/cudnn/include:${cudaToolkit}/include:''${CPATH:-}"
-              echo "✓ vllm: cu13 (jit/torch) + cu12 (vllm._C runtime) verified" >&2
+              echo "✓ vllm: cu13 venv libs verified" >&2
             else
               echo "ℹ vllm/.venv missing under $_root — run \`uv sync\` to materialize cu13 libs" >&2
             fi
@@ -231,15 +212,14 @@
                 if [ ! -e "$need" ]; then
                   echo "✘ sglang devshell: missing $need" >&2
                   echo "  cu13 venv libs come from \`uv sync\` in sglang/." >&2
-                  echo "  cu12 runtime libs come from nixpkgs cudaPackages." >&2
+                  echo "  cu12 runtime libs come from nixpkgs cudaPackages_12_9." >&2
                   return 1
                 fi
               done
-              ${cu13SymlinkLoop}
               export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12Cudart}/lib:${cu12Extras}/lib:${lib.makeLibraryPath (with pkgs; [ numactl openmpi czmq zeromq ])}:${runtimeLibs}:${driverLib}"
               export LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
               export CPATH="${cu13TypedefShim}/include:$NV/cu13/include:$NV/cudnn/include:${cudaToolkit}/include:''${CPATH:-}"
-              echo "✓ sglang: cu13 (jit/torch) + cu12 (cudart + extras) verified" >&2
+              echo "✓ sglang: cu13 venv + cu12 (cudart, nvrtc, cublas) verified" >&2
             else
               echo "ℹ sglang/.venv missing under $_root — run \`uv sync\` to materialize cu13 libs" >&2
             fi
@@ -248,11 +228,13 @@
         };
 
         # ─────────── trt-llm ─────────────────────────────────────────────────
-        # cu13 venv libs + cu12 cudart. trt-llm doesn't JIT-compile cutlass
-        # → no cu13TypedefShim; doesn't dlopen cu12 nvrtc/cublas → no
-        # cu12Extras. openmpi + zeromq for IPC.
+        # cu13 venv libs + cu12 cudart (torchao's _C.abi3.so still
+        # DT_NEEDs libcudart.so.12 even on the cu13 trt-llm stack).
+        # No cu13TypedefShim (no flashinfer JIT) and no cu12Extras
+        # (nothing here DT_NEEDs cu12 nvrtc/cublas). openmpi + zeromq
+        # for the MPI executor pool.
         #
-        # tensorrt-llm 1.2 cu13 stack references CUDA Driver API symbols
+        # tensorrt-llm 1.3 cu13 stack references CUDA Driver API symbols
         # (cuKernelGetName, added in CUDA 12.4) that aren't in libcuda.so
         # on r5xx (≤r575). Refuse shell entry rather than producing an
         # unrunnable venv.
@@ -286,15 +268,14 @@
                 if [ ! -e "$need" ]; then
                   echo "✘ trt-llm devshell: missing $need" >&2
                   echo "  cu13 venv libs come from \`uv sync\` in trt-llm/." >&2
-                  echo "  cu12 runtime libs come from nixpkgs cudaPackages." >&2
+                  echo "  cu12 cudart comes from nixpkgs cudaPackages_12_9." >&2
                   return 1
                 fi
               done
-              ${cu13SymlinkLoop}
               export NIX_LD_LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:$NV/nccl/lib:${cu12Cudart}/lib:${lib.makeLibraryPath (with pkgs; [ openmpi zeromq ])}:${runtimeLibs}:${driverLib}"
               export LIBRARY_PATH="$NV/cu13/lib:$NV/cudnn/lib:''${LIBRARY_PATH:-}"
               export CPATH="$NV/cu13/include:$NV/cudnn/include:${cudaToolkit}/include:''${CPATH:-}"
-              echo "✓ trt-llm: cu13 (jit/torch) + cu12 (cudart) verified" >&2
+              echo "✓ trt-llm: cu13 venv + cu12 cudart verified" >&2
             else
               echo "ℹ trt-llm/.venv missing under $_root — run \`uv sync\` to materialize cu13 libs" >&2
             fi
