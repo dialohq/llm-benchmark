@@ -93,9 +93,13 @@
         ninja rustc cargo curl jq htop
       ];
 
-      # Runtime libs the manylinux wheels dlopen.
+      # Runtime libs the manylinux wheels dlopen. Verified by surveying
+      # DT_NEEDs across all three venvs: libstdc++/libgcc_s, libz, libssl/
+      # libcrypto, liblzma. (libffi/glib/ncurses had zero hits — uv-managed
+      # python-build-standalone statically links libffi, and no wheel here
+      # links glib or ncurses.)
       runtimeLibs = lib.makeLibraryPath (with pkgs; [
-        stdenv.cc.cc.lib zlib glib libffi openssl ncurses xz
+        stdenv.cc.cc.lib zlib openssl xz
       ]);
 
       # Default cache lives inside the repo (.cache/) so it's discoverable,
