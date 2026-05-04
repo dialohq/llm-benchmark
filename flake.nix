@@ -25,84 +25,59 @@
       # their own NCCL via wheels).
       driverLib = "/usr/lib/x86_64-linux-gnu";
 
-      # Two CUDA major versions live in each engine venv simultaneously:
+      # Two CUDA majors coexist in each engine venv:
+      #   cu13 — torch wheel + flashinfer JIT (headers under nvidia/cu13/
+      #          include must match what flashinfer compiles against).
+      #   cu12 — vllm._C.abi3.so DT_NEEDED libcudart.so.12; supplied from
+      #          nixpkgs. *Runtime only* — never on LIBRARY_PATH, or the
+      #          JIT linker's `-lcudart` would pick cu12 over cu13 and
+      #          break ABI compat with torch.
       #
-      #   cu13 — torch 2.10+cu130 wheel: every nvidia/cu13/lib/lib*.so.13,
-      #          libcublasLt.so.13, etc.; loaded by torch at import time.
-      #          Headers under nvidia/cu13/include are what flashinfer's
-      #          JIT compiler must use so the .so it produces is ABI-
-      #          compatible with the torch runtime.
-      #
-      #   cu12 — vllm 0.19.1 wheel: vllm._C.abi3.so DT_NEEDED is
-      #          libcudart.so.12. The vllm wheel does NOT bundle cu12 libs
-      #          — it relies on the host providing libcudart.so.12. We
-      #          supply it from nixpkgs. *Runtime only* — never on
-      #          LIBRARY_PATH (so the JIT linker can't accidentally pick
-      #          up cu12 .so for `-lcudart`).
-      #
-      # Bumping vllm to a cu13-built wheel (when one ships) lets us drop the
-      # cu12 side. Until then both must coexist; mismatch is what caused
-      # the iter-0 ImportError loop on this branch.
+      # Pin the exact 12.9 minor: this matches the cu12 versions the
+      # h100/h200 venvs bundle (cudart 12.9.79, cublas 12.9.1.4, nvrtc
+      # 12.9.86 — see uv.lock). nixpkgs `cudaPackages` and `cudaPackages_12`
+      # are both currently aliases for 12.9 but could float to a different
+      # minor; `cudaPackages_12_9` won't.
+      cuda12 = pkgs.cudaPackages_12_9;
 
-      # cudaToolkit is the *compiler*-only path. Keeping libs out of here
-      # is deliberate: flashinfer's run_ninja hard-codes
-      #   `-L${CUDA_HOME}/lib64 -lcudart`
-      # so any libcudart.so.12 in cudaToolkit/lib would beat LIBRARY_PATH=cu13.
-      # Empty lib/lib64 ensures `-lcudart` falls through to LIBRARY_PATH where
-      # cu13 (from the venv) wins, producing a JIT .so ABI-compatible with torch.
+      # nvcc + cccl headers, no libs. flashinfer's run_ninja hard-codes
+      # `-L${CUDA_HOME}/lib64 -lcudart`; an empty lib/ here ensures that
+      # falls through to LIBRARY_PATH where cu13 (from the venv) wins.
       cudaToolkit = pkgs.symlinkJoin {
-        name = "cuda-12.9-nvcc-only";
-        paths = lib.concatMap (p: map (o: p.${o}) p.outputs)
-          (with pkgs.cudaPackages; [ cuda_nvcc cuda_cccl ]);
+        name = "cuda-${cuda12.cuda_nvcc.version}-nvcc-only";
+        paths = [ cuda12.cuda_nvcc cuda12.cuda_cccl ];
       };
 
-      # cu12 cudart for vllm._C wheel's runtime dlopen of libcudart.so.12.
-      # `.lib` output holds the .so files; `dev` (colocated with `out`) holds
-      # the include/ used by cu13TypedefShim below.
-      cu12Cudart = lib.getOutput "lib" pkgs.cudaPackages.cuda_cudart;
+      # cu12 cudart for vllm._C's libcudart.so.12. cuda_cudart is single-
+      # output, so this path holds both lib/ and include/ (shim below
+      # reads include/cudaTypedefs.h from it).
+      cu12Cudart = cuda12.cuda_cudart;
 
-      # cu12 libs sglang's bundled sgl_kernel + flashinfer kernels dlopen at
-      # runtime. Kept *outside* CUDA_HOME so the JIT linker doesn't pick up
-      # cu12 .so for `-lcudart` / `-lcublas` (cu13 in LIBRARY_PATH must win
-      # for ABI compat with torch). sglang only.
+      # cu12 libs sglang's bundled sgl_kernel + flashinfer kernels dlopen
+      # at runtime (libnvrtc.so.12 etc). Kept *outside* CUDA_HOME so the
+      # JIT linker doesn't pick cu12 over cu13 for `-lcudart`/`-lcublas`.
       cu12Extras = pkgs.symlinkJoin {
         name = "cu12-extras";
-        paths = with pkgs.cudaPackages; [
-          (lib.getOutput "lib" cuda_nvrtc)
-          (lib.getOutput "lib" libcublas)
-          (lib.getOutput "lib" libcusparse)
-          (lib.getOutput "lib" libcusolver)
-          (lib.getOutput "lib" libcurand)
-          (lib.getOutput "lib" libcufft)
-          (lib.getOutput "lib" cuda_cupti)
+        paths = with cuda12; [
+          cuda_nvrtc.lib libcublas.lib libcusparse.lib libcusolver.lib
+          libcurand.lib libcufft.lib cuda_cupti.lib
         ];
       };
 
-      # cu13's cudaTypedefs.h dropped the unversioned `PFN_X` macro aliases
-      # that cu12 carried (PFN_X is now only present as `PFN_X_v12000`).
-      # flashinfer 0.6.6's bundled cutlass references the unversioned forms
-      # and won't compile against cu13 headers alone. Build a shim include
-      # dir whose cudaTypedefs.h `#include_next`s cu13's real header then
-      # adds back the macro alias block extracted verbatim from cu12 cudart.
-      # Put this dir FIRST on CPATH; everything else falls through to cu13.
-      # vllm + sglang only (trt-llm doesn't JIT-compile cutlass).
+      # cu13 dropped the unversioned `PFN_X` macro aliases (now only
+      # `PFN_X_v12000`); flashinfer's bundled cutlass references the
+      # unversioned forms. Shim cudaTypedefs.h: `#include_next`s cu13's
+      # real header then adds back the cu12 macro aliases. Put FIRST on
+      # CPATH so it shadows only that one header. vllm + sglang only.
       cu13TypedefShim = pkgs.runCommand "cu13-typedef-shim" { } ''
         mkdir -p $out/include
-        aliases=$(mktemp)
-        grep -E '^#define PFN_cu' \
-          ${cu12Cudart}/include/cudaTypedefs.h > "$aliases"
         {
           echo '#pragma once'
           echo '#include_next <cudaTypedefs.h>'
           # Guard each alias so a future cu13 that re-adds them won't redefine.
-          while read -r line; do
-            name=$(echo "$line" | awk '{print $2}')
-            echo "#ifndef $name"
-            echo "$line"
-            echo "#endif"
-          done < "$aliases"
+          grep -E '^#define PFN_cu' ${cu12Cudart}/include/cudaTypedefs.h \
+            | awk '{print "#ifndef " $2 "\n" $0 "\n#endif"}'
         } > $out/include/cudaTypedefs.h
-        rm -f "$aliases"
       '';
 
       # Note: no python here. UV_PYTHON_PREFERENCE=only-managed makes uv
