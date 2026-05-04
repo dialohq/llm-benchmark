@@ -1,0 +1,10 @@
+# Extra LLM API options for trtllm-serve, loaded via --extra_llm_api_options.
+# Mirrors NVIDIA's BS=1 EAGLE3 recipe from the gpt-oss tech_blog (blog11).
+speculative_config:
+  decoding_type: Eagle3
+  max_draft_len: 3
+  speculative_model_dir: nvidia/gpt-oss-120b-Eagle3-short-context
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  max_batch_size: 4   # 1 = plain decode shape, 4 = EAGLE3 verify (k=3) shape

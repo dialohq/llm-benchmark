@@ -1,0 +1,45 @@
+description: |
+  sglang serve openai/gpt-oss-120b on a single B200, TP=1.
+  iter-14 baseline for the sglang engine sweep.
+  attention-backend=flashinfer (auto-pick `trtllm_mha` is for sm100 + MXFP4
+  but we set it explicitly so the YAML survives a future sglang version
+  that auto-picks differently). FA3 is sm80-90 only — fails here.
+  cuda-graph-max-bs=1, max-running-requests=1, mem-fraction-static=0.85.
+engine: sglang
+cmd: sglang
+args:
+  - serve
+  - --model-path
+  - openai/gpt-oss-120b
+  - --tp
+  - "1"
+  - --attention-backend
+  - trtllm_mha
+  - --cuda-graph-max-bs
+  - "1"
+  - --max-running-requests
+  - "1"
+  - --mem-fraction-static
+  - "0.85"
+cwd: sglang
+venv: sglang/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/sglang/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"

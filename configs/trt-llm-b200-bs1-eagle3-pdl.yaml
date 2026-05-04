@@ -1,0 +1,53 @@
+description: |
+  trtllm-serve openai/gpt-oss-120b on a single B200, TP=1.
+  iter-19 deviation from iter-18 baseline: EAGLE3 spec decoding using
+  nvidia/gpt-oss-120b-Eagle3-short-context (NVIDIA's BS=1-tuned draft) +
+  TRTLLM_ENABLE_PDL=1 (Programmatic Dependent Launch — overlaps
+  consecutive kernel launches at the GPU scheduler level on Blackwell).
+  Per scout report this is NVIDIA's published BS=1 low-latency recipe.
+
+  Key flags from the recipe (https://github.com/NVIDIA/TensorRT-LLM blog11
+  GPT_OSS_Eagle3): speculative_config.decoding_type=Eagle3, max_draft_len=3,
+  cuda_graph with max_batch_size=4 (1=plain decode, 4=verify with k=3).
+  --speculative_config et al. are passed via --extra_llm_api_options yaml.
+engine: trt-llm
+cmd: mpirun
+args:
+  - --allow-run-as-root
+  - -np
+  - "1"
+  - trtllm-serve
+  - /root/.cache/huggingface/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+  - --backend
+  - pytorch
+  - --tp_size
+  - "1"
+  - --max_batch_size
+  - "1"
+  - --max_seq_len
+  - "4096"
+  - --extra_llm_api_options
+  - /workspace/llm-benchmark/configs/trt-llm-eagle3-extra.yaml
+cwd: trt-llm
+venv: trt-llm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/trt-llm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"
+  TRTLLM_ENABLE_PDL: "1"

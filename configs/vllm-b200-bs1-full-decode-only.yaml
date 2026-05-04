@@ -1,0 +1,46 @@
+description: |
+  iter-44: iter-38 winner (vLLM nightly + EAGLE3 nvidia k=2 + Recipe)
+  with cudagraph_mode FULL_AND_PIECEWISE → FULL_DECODE_ONLY +
+  compile_sizes=[1]. FULL_DECODE_ONLY collapses the entire decode
+  path (incl. attention) into a single CUDA graph replay; the current
+  default keeps attention OUT of the graph. compile_sizes=[1] makes
+  Inductor specialize on shape 1 only — smaller, faster compile.
+engine: vllm
+cmd: vllm
+args:
+  - serve
+  - openai/gpt-oss-120b
+  - --tensor-parallel-size
+  - "1"
+  - --gpu-memory-utilization
+  - "0.90"
+  - --max-model-len
+  - "4096"
+  - --max-num-seqs
+  - "1"
+  - --speculative-config
+  - '{"method":"eagle3","model":"nvidia/gpt-oss-120b-Eagle3","num_speculative_tokens":2}'
+  - --compilation-config
+  - '{"custom_ops":["+rms_norm"],"pass_config":{"fuse_allreduce_rms":true,"eliminate_noops":true},"cudagraph_mode":"FULL_DECODE_ONLY"}'
+cwd: vllm
+venv: vllm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/vllm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"
+  VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8: "1"

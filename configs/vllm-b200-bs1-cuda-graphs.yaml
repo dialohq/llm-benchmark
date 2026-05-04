@@ -1,0 +1,39 @@
+description: |
+  vllm serve openai/gpt-oss-120b on a single B200, TP=1.
+  Iter-1 deviation from baseline: drop --enforce-eager so vllm captures
+  CUDA graphs at BS=1 — typically the highest-leverage single-stream
+  win because per-step Python+CUDA-launch overhead disappears.
+engine: vllm
+cmd: vllm
+args:
+  - serve
+  - openai/gpt-oss-120b
+  - --tensor-parallel-size
+  - "1"
+  - --gpu-memory-utilization
+  - "0.90"
+  - --max-model-len
+  - "4096"
+  - --max-num-seqs
+  - "1"
+cwd: vllm
+venv: vllm/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/vllm/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  CPATH: $CPATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT
+  CUDA_VISIBLE_DEVICES: "0"

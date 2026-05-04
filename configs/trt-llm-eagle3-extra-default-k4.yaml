@@ -1,0 +1,8 @@
+speculative_config:
+  decoding_type: Eagle3
+  max_draft_len: 4
+  speculative_model_dir: nvidia/gpt-oss-120b-Eagle3
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 5]

@@ -1,0 +1,20 @@
+# NVIDIA's published gpt-oss low-latency recipe (per HF model cards +
+# blog11 GPT_OSS_Eagle3 + blog6 Llama4_maverick_eagle).
+# - eagle3_one_model: fused single-engine draft+target (avoids Python boundary)
+# - enable_min_latency: prefer latency-optimized kernels at small batches
+# - enable_autotuner: false — autotuner picks throughput-favoring kernels
+# - stream_interval: 20 — buffer before SSE dispatch (cheap per-token Python)
+# - num_postprocess_workers: 2 — detokenization off the executor thread
+speculative_config:
+  decoding_type: Eagle3
+  max_draft_len: 2
+  speculative_model_dir: nvidia/gpt-oss-120b-Eagle3-v2
+  eagle3_one_model: true
+disable_overlap_scheduler: true
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes: [1, 3]
+enable_min_latency: true
+enable_autotuner: false
+stream_interval: 20
+num_postprocess_workers: 2

@@ -8,7 +8,9 @@ requires-python = ">=3.10,<3.14"
 dependencies = [
   "huggingface-hub",
   "hf-transfer",
-  "mpi4py==4.0.1",
+  # mpi4py 4.0.1 hits AttributeError: module 'distutils.log' has no attribute
+  # 'warning' under setuptools >=80 / Python 3.12; 4.1.x drops the call.
+  "mpi4py>=4.1.1",
 ]
 
 # ---------------------------------------------------------------------------
@@ -43,24 +45,33 @@ dependencies = [
 
 [project.optional-dependencies]
 driver-r580 = [
-  "tensorrt-llm==1.2.1",
-  "torch==2.9.1",
-  "torchvision==0.24.1",
-  "torchaudio==2.9.1",
+  # Upgrade to 1.3.0rc9 (latest at https://pypi.nvidia.com/tensorrt-llm/).
+  # tensorrt-llm pins its own torch — leave torch* unpinned and let it flow,
+  # routed through the cu130 index in tool.uv.sources below.
+  "tensorrt-llm>=1.3.0rc9",
+  "torch",
+  "torchvision",
+  "torchaudio",
   "nvidia-ml-py==13.580.126",
 ]
 driver-r590 = [
-  "tensorrt-llm==1.2.1",
-  "torch==2.9.1",
-  "torchvision==0.24.1",
-  "torchaudio==2.9.1",
+  # Upgrade to 1.3.0rc9 (latest at https://pypi.nvidia.com/tensorrt-llm/).
+  # tensorrt-llm pins its own torch — leave torch* unpinned and let it flow,
+  # routed through the cu130 index in tool.uv.sources below.
+  "tensorrt-llm>=1.3.0rc9",
+  "torch",
+  "torchvision",
+  "torchaudio",
   "nvidia-ml-py==13.590.48",
 ]
 driver-r595 = [
-  "tensorrt-llm==1.2.1",
-  "torch==2.9.1",
-  "torchvision==0.24.1",
-  "torchaudio==2.9.1",
+  # Upgrade to 1.3.0rc9 (latest at https://pypi.nvidia.com/tensorrt-llm/).
+  # tensorrt-llm pins its own torch — leave torch* unpinned and let it flow,
+  # routed through the cu130 index in tool.uv.sources below.
+  "tensorrt-llm>=1.3.0rc9",
+  "torch",
+  "torchvision",
+  "torchaudio",
   "nvidia-ml-py==13.595.45",
 ]
 

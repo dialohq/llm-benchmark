@@ -1,0 +1,40 @@
+description: |
+  sglang serve openai/gpt-oss-120b, TP=2, fa3 attention, batch-1
+  steady-state profile. Mirrors the former bin/smoke-sglang flag combo.
+  Run inside `nix develop .#sglang`.
+engine: sglang
+cmd: sglang
+args:
+  - serve
+  - --model-path
+  - openai/gpt-oss-120b
+  - --tp
+  - "2"
+  - --attention-backend
+  - fa3
+  - --cuda-graph-max-bs
+  - "1"
+  - --max-running-requests
+  - "1"
+  - --mem-fraction-static
+  - "0.85"
+cwd: sglang
+venv: sglang/.venv
+warmup: 3
+env:
+  PATH: $REPO_ROOT/sglang/.venv/bin:$PATH
+  HOME: $HOME
+  CC: $CC
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
+  UV_HTTP_TIMEOUT: "600"
+  CUDA_HOME: $CUDA_HOME
+  CUDA_PATH: $CUDA_PATH
+  TRITON_LIBCUDA_PATH: $TRITON_LIBCUDA_PATH
+  LIBRARY_PATH: $LIBRARY_PATH
+  NIX_LD: $NIX_LD
+  NIX_LD_LIBRARY_PATH: $NIX_LD_LIBRARY_PATH
+  MPICC: $MPICC
+  TRITON_CACHE_DIR: $TRITON_CACHE_DIR
+  TORCHINDUCTOR_CACHE_DIR: $TORCHINDUCTOR_CACHE_DIR
+  FLASHINFER_WORKSPACE_BASE: $FLASHINFER_WORKSPACE_BASE
+  VLLM_CACHE_ROOT: $VLLM_CACHE_ROOT

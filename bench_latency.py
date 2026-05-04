@@ -67,10 +67,96 @@ def load_queries(
     rng = random.Random(seed)
     sampled = rng.sample(rows, min(n, len(rows)))
 
+    auto_guided_json = bool(extra_body.pop("_auto_guided_json", False))
+    auto_class_schema = bool(extra_body.pop("_auto_class_schema", False))
+
+    # Per-class JSON schemas for the top JSON-asking prompt classes in
+    # queries.csv. Triggered via _auto_class_schema; covers ~70% of all
+    # queries. Detected via short fingerprint of the system message.
+    # Class fingerprints are first-80-chars of the system prompt.
+    _SCHEMA_INTENT_CLASSIFIER_PL = {
+        "type": "object",
+        "properties": {
+            "threads": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "utterances": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "side": {"type": "string", "enum": ["caller", "agent"]},
+                                    "text": {"type": "string"},
+                                },
+                                "required": ["side", "text"],
+                            },
+                        },
+                    },
+                    "required": ["topic", "summary", "utterances"],
+                },
+            }
+        },
+        "required": ["threads"],
+    }
+    _SCHEMA_DATA_EXTRACTOR_CARD = {
+        "type": "object",
+        "properties": {
+            "card_slots": {
+                "type": "object",
+                "properties": {
+                    "requested_fields": {"type": "array", "items": {"type": "string"}},
+                    "last_four": {"type": ["string", "null"]},
+                },
+                "required": ["requested_fields", "last_four"],
+            }
+        },
+        "required": ["card_slots"],
+    }
+
+    def _per_class_schema(sys_msg: str):
+        head = sys_msg[:80]
+        if head.startswith("Jesteś klasyfikatorem intencji"):
+            return _SCHEMA_INTENT_CLASSIFIER_PL
+        if head.startswith("You are a data extractor for a bank") and '"card_slots"' in sys_msg:
+            return _SCHEMA_DATA_EXTRACTOR_CARD
+        return None
+
     out: list[dict[str, Any]] = []
     for raw in sampled:
         payload = json.loads(raw)
         payload["model"] = model_override
+        # queries.csv carries a non-OpenAI `provider` field (e.g. "groq")
+        # that the original generator embedded. vLLM/sglang silently accept
+        # unknown fields; trt-llm uses strict pydantic and 400s the request.
+        # Strip it here so all engines see the same OpenAI-spec body.
+        payload.pop("provider", None)
+        # Per-query JSON guided-decoding heuristic: 84% of queries.csv
+        # system prompts say "Return ONLY valid JSON" / similar. Setting
+        # guided_json={"type":"object"} on those lets vllm's grammar
+        # backend (xgrammar by default in 0.20) skip LM forward passes
+        # on tokens that are uniquely determined by the JSON grammar
+        # (~47% of output is pure JSON syntax for this workload).
+        # Triggered only when extra_body has _auto_guided_json: true so
+        # baseline runs stay bit-identical.
+        if auto_guided_json or auto_class_schema:
+            sys_msg = next(
+                (m.get("content", "") for m in payload.get("messages", [])
+                 if m.get("role") == "system"),
+                "",
+            )
+            schema = None
+            if auto_class_schema:
+                schema = _per_class_schema(sys_msg)
+            if schema is None and auto_guided_json:
+                if "JSON" in sys_msg or "json" in sys_msg.split("\n", 1)[0].lower():
+                    schema = {"type": "object"}
+            if schema is not None:
+                payload.setdefault("extra_body", {})
+                payload["extra_body"]["guided_json"] = schema
         # Merge extra_body on top — caller-provided overrides win.
         payload.update(extra_body)
         out.append(payload)
